@@ -16,6 +16,8 @@ class Core
 {
 public:
   static constexpr VirtualMemoryAddress RESET_VECTOR = UINT32_C(0xBFC00000);
+  static constexpr VirtualMemoryAddress ICACHE_LINE_SIZE = 4;
+  static constexpr VirtualMemoryAddress ICACHE_LINES = 256;
   static constexpr PhysicalMemoryAddress DCACHE_LOCATION = UINT32_C(0x1F800000);
   static constexpr PhysicalMemoryAddress DCACHE_LOCATION_MASK = UINT32_C(0xFFFFFC00);
   static constexpr PhysicalMemoryAddress DCACHE_OFFSET_MASK = UINT32_C(0x000003FF);
@@ -143,6 +145,10 @@ private:
   u32 m_next_load_delay_old_value = 0;
 
   u32 m_cache_control = 0;
+
+  // instruction cache - directly mapped
+  std::array<u32, ICACHE_LINES> m_icache_tags = {};
+  std::array<std::array<u32, ICACHE_LINE_SIZE>, ICACHE_LINES> m_icache_lines = {};
 
   // data cache (used as scratchpad)
   std::array<u8, DCACHE_SIZE> m_dcache = {};

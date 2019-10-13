@@ -44,6 +44,10 @@ void Core::Reset()
   m_cop2.Reset();
 
   SetPC(RESET_VECTOR);
+
+  m_icache_tags.fill(UINT32_C(0xFFFFFFFF));
+  for (u32 i = 0; i < ICACHE_LINES; i++)
+    m_icache_lines[i].fill(UINT32_C(0xFFFFFFFF));
 }
 
 bool Core::DoState(StateWrapper& sw)
@@ -569,10 +573,60 @@ void Core::Execute()
   }
 }
 
+static std::tuple<u32, u32> GetLineAndTag(u32 pc)
+{
+  const u32 line = (pc >> 4) & UINT32_C(0xFF);
+  const u32 tag = (pc >> 12) & UINT32_C(0xFFFFF);
+  return std::make_tuple(line, tag);
+}
+
+static bool IsCacheableAddress(u32 pc)
+{
+  return (pc < UINT32_C(0xA0000000));
+}
+
 bool Core::FetchInstruction()
 {
   DebugAssert(Common::IsAlignedPow2(m_regs.npc, 4));
-  if (DoMemoryAccess<MemoryAccessType::Read, MemoryAccessSize::Word>(m_regs.npc, m_next_instruction.bits) < 0)
+
+  if (IsCacheableAddress(m_regs.npc))
+  {
+    const auto [cache_line, cache_tag] = GetLineAndTag(m_regs.npc);
+    if (m_icache_tags[cache_line] != cache_tag)
+    {
+      // Cache miss. Update tag.
+      m_icache_tags[cache_line] = cache_tag;
+
+      // Populate cache.
+#if 1
+      u32 fetch_addr = m_regs.npc & ~UINT32_C(15);
+      u32* line_base = m_icache_lines[cache_line].data();
+      u32* line_ptr = line_base;
+      for (u32 i = 0; i < 4; i++, fetch_addr += 4, line_ptr++)
+      {
+        if (DoMemoryAccess<MemoryAccessType::Read, MemoryAccessSize::Word>(fetch_addr, *line_ptr) < 0)
+        {
+          // Bus errors don't set BadVaddr.
+          RaiseException(Exception::IBE, m_regs.npc, false, false, 0);
+          return false;
+        }
+      }
+#else
+      const u32 fetch_addr = m_regs.npc & (~UINT32_C(15) & UINT32_C(0x1FFFFFFF));
+      u32* line_base = m_icache_lines[cache_line].data();
+      m_bus->ReadWords(fetch_addr, line_base, ICACHE_LINE_SIZE);
+#endif
+
+      // Read from cache.
+      m_next_instruction.bits = line_base[(m_regs.npc >> 2) & UINT32_C(3)];
+    }
+    else
+    {
+      // Cache hit.
+      m_next_instruction.bits = m_icache_lines[cache_line][(m_regs.npc >> 2) & UINT32_C(3)];
+    }
+  }
+  else if (DoMemoryAccess<MemoryAccessType::Read, MemoryAccessSize::Word>(m_regs.npc, m_next_instruction.bits) < 0)
   {
     // Bus errors don't set BadVaddr.
     RaiseException(Exception::IBE, m_regs.npc, false, false, 0);
