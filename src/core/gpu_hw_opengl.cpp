@@ -65,9 +65,9 @@ void GPU_HW_OpenGL::RestoreGraphicsAPIState()
   glBindVertexArray(m_vao_id);
 }
 
-void GPU_HW_OpenGL::UpdateResolutionScale()
+void GPU_HW_OpenGL::UpdateSettings()
 {
-  GPU_HW::UpdateResolutionScale();
+  GPU_HW::UpdateSettings();
 
   CreateFramebuffer();
   CompilePrograms();
@@ -292,7 +292,8 @@ bool GPU_HW_OpenGL::CompileProgram(GL::Program& prog, TransparencyRenderMode tra
     prog.BindAttribute(3, "a_texpage");
   }
 
-  prog.BindFragData(0, "o_col0");
+  prog.BindFragDataIndexed(0, "o_col0");
+  prog.BindFragDataIndexed(1, "o_col1");
 
   if (!prog.Link())
     return false;
@@ -339,7 +340,9 @@ void GPU_HW_OpenGL::SetDrawState(TransparencyRenderMode render_mode)
     m_vram_read_texture->Bind();
   }
 
-  if (render_mode == TransparencyRenderMode::Off || render_mode == TransparencyRenderMode::OnlyOpaque)
+  const bool force_blending = (m_batch.texture_enable && m_use_bilinear_filtering);
+  if (!force_blending &&
+      (render_mode == TransparencyRenderMode::Off || render_mode == TransparencyRenderMode::OnlyOpaque))
   {
     glDisable(GL_BLEND);
   }
@@ -349,7 +352,7 @@ void GPU_HW_OpenGL::SetDrawState(TransparencyRenderMode render_mode)
     glBlendEquationSeparate(
       m_batch.transparency_mode == TransparencyMode::BackgroundMinusForeground ? GL_FUNC_REVERSE_SUBTRACT : GL_FUNC_ADD,
       GL_FUNC_ADD);
-    glBlendFuncSeparate(GL_ONE, GL_SRC_ALPHA, GL_ONE, GL_ZERO);
+    glBlendFuncSeparate(GL_ONE, GL_SRC1_ALPHA, GL_ONE, GL_ZERO);
   }
 
   if (m_drawing_area_changed)

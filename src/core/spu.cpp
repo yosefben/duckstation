@@ -918,7 +918,7 @@ void SPU::GenerateSample()
   std::array<AudioStream::SampleType, 2> out_samples;
   out_samples[0] = Clamp16(ApplyVolume(left_sum, m_main_volume_left.GetVolume()));
   out_samples[1] = Clamp16(ApplyVolume(right_sum, m_main_volume_right.GetVolume()));
-  m_audio_stream->WriteSamples(out_samples.data(), 1);
+  //m_audio_stream->WriteSamples(out_samples.data(), 1);
 
 #if 0
   static FILE* fp = nullptr;

@@ -11,7 +11,10 @@ public:
   GPU_HW();
   virtual ~GPU_HW();
 
+  virtual bool Initialize(System* system, DMA* dma, InterruptController* interrupt_controller, Timers* timers) override;
   virtual void Reset() override;
+
+  virtual void UpdateSettings() override;
 
 protected:
   struct HWVertex
@@ -96,6 +99,8 @@ protected:
   std::string GenerateDisplayFragmentShader(bool depth_24bit, bool interlaced);
 
   HWRenderBatch m_batch = {};
+
+  bool m_use_bilinear_filtering = false;
 
 private:
   static HWRenderBatch::Primitive GetPrimitiveForCommand(RenderCommand rc);

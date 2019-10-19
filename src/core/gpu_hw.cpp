@@ -1,4 +1,5 @@
 #include "gpu_hw.h"
+#include "system.h"
 #include "YBaseLib/Assert.h"
 #include "YBaseLib/Log.h"
 #include <sstream>
@@ -13,6 +14,22 @@ void GPU_HW::Reset()
   GPU::Reset();
 
   m_batch = {};
+}
+
+bool GPU_HW::Initialize(System* system, DMA* dma, InterruptController* interrupt_controller, Timers* timers)
+{
+  if (!GPU::Initialize(system, dma, interrupt_controller, timers))
+    return false;
+
+  m_use_bilinear_filtering = m_system->GetSettings().gpu_bilinear_filtering;
+  return true;
+}
+
+void GPU_HW::UpdateSettings()
+{
+  GPU::UpdateSettings();
+
+  m_use_bilinear_filtering = m_system->GetSettings().gpu_bilinear_filtering;
 }
 
 void GPU_HW::LoadVertices(RenderCommand rc, u32 num_vertices, const u32* command_ptr)
@@ -227,13 +244,13 @@ void main()
 
   v_col0 = a_col0.rgb;
   #if TEXTURED
-    v_tex0 = vec2(float(a_texcoord & 0xFFFF), float(a_texcoord >> 16)) / vec2(255.0);
+    v_tex0 = vec2(float(a_texcoord & 0xFFFF), float(a_texcoord >> 16));// / vec2(255.0);
 
     // base_x,base_y,palette_x,palette_y
-    v_texpage.x = (a_texpage & 15) * 64 * RESOLUTION_SCALE;
-    v_texpage.y = ((a_texpage >> 4) & 1) * 256 * RESOLUTION_SCALE;
-    v_texpage.z = ((a_texpage >> 16) & 63) * 16 * RESOLUTION_SCALE;
-    v_texpage.w = ((a_texpage >> 22) & 511) * RESOLUTION_SCALE;
+    v_texpage.x = (a_texpage & 15) * 64;
+    v_texpage.y = ((a_texpage >> 4) & 1) * 256;
+    v_texpage.z = ((a_texpage >> 16) & 63) * 16;
+    v_texpage.w = ((a_texpage >> 22) & 511);
   #endif
 }
 )";
@@ -256,8 +273,13 @@ std::string GPU_HW::GenerateFragmentShader(TransparencyRenderMode transparency, 
   DefineMacro(ss, "PALETTE_4_BIT", textured && texture_color_mode == GPU::TextureColorMode::Palette4Bit);
   DefineMacro(ss, "PALETTE_8_BIT", textured && texture_color_mode == GPU::TextureColorMode::Palette8Bit);
   DefineMacro(ss, "BLENDING", blending);
+  DefineMacro(ss, "BILINEAR_FILTERING", textured && m_use_bilinear_filtering);
+  DefineMacro(ss, "USE_DUAL_SOURCE_BLEND",
+              transparency != TransparencyRenderMode::Off || (textured && m_use_bilinear_filtering));
 
   ss << R"(
+const vec4 TRANSPARENT_PIXEL_COLOR = vec4(0.0, 0.0, 0.0, 0.0);
+
 in vec3 v_col0;
 uniform vec2 u_transparent_alpha;
 #if TEXTURED
@@ -267,32 +289,22 @@ uniform vec2 u_transparent_alpha;
   uniform uvec4 u_texture_window;
 #endif
 
-out vec4 o_col0;
+out vec4 o_col0;    // Written to the framebuffer.
+
+#if USE_DUAL_SOURCE_BLEND
+out vec4 o_col1;    // Used in the blend equation.
+#endif
 
 #if TEXTURED
-ivec2 ApplyNativeTextureWindow(ivec2 coords)
+ivec2 ApplyTextureWindow(ivec2 coords)
 {
   uint x = (uint(coords.x) & ~(u_texture_window.x * 8u)) | ((u_texture_window.z & u_texture_window.x) * 8u);
   uint y = (uint(coords.y) & ~(u_texture_window.y * 8u)) | ((u_texture_window.w & u_texture_window.y) * 8u);
   return ivec2(int(x), int(y));
-}  
-
-ivec2 ApplyTextureWindow(ivec2 coords)
-{
-  if (RESOLUTION_SCALE == 1)
-    return ApplyNativeTextureWindow(coords);
-
-  ivec2 downscaled_coords = coords / ivec2(RESOLUTION_SCALE);
-  ivec2 coords_offset = coords % ivec2(RESOLUTION_SCALE);
-  return (ApplyNativeTextureWindow(downscaled_coords) * ivec2(RESOLUTION_SCALE)) + coords_offset;
 }
 
-vec4 SampleFromVRAM(vec2 coord)
+vec4 SampleVRAMCoordinates(ivec2 icoord)
 {
-  // from 0..1 to 0..255
-  ivec2 icoord = ivec2(coord * vec2(255 * RESOLUTION_SCALE));
-  icoord = ApplyTextureWindow(icoord);
-
   // adjust for tightly packed palette formats
   ivec2 index_coord = icoord;
   #if PALETTE_4_BIT
@@ -302,7 +314,8 @@ vec4 SampleFromVRAM(vec2 coord)
   #endif
 
   // fixup coords
-  ivec2 vicoord = ivec2(v_texpage.x + index_coord.x, fixYCoord(v_texpage.y + index_coord.y));
+  ivec2 vicoord = ivec2((v_texpage.x + index_coord.x) * RESOLUTION_SCALE,
+                        fixYCoord((v_texpage.y + index_coord.y) * RESOLUTION_SCALE));
 
   // load colour/palette
   vec4 color = texelFetch(samp0, vicoord, 0);
@@ -310,62 +323,131 @@ vec4 SampleFromVRAM(vec2 coord)
   // apply palette
   #if PALETTE
     #if PALETTE_4_BIT
-      int subpixel = int(icoord.x / RESOLUTION_SCALE) & 3;
+      int subpixel = int(icoord.x) & 3;
       uint vram_value = RGBA8ToRGBA5551(color);
       int palette_index = int((vram_value >> (subpixel * 4)) & 0x0Fu);
     #elif PALETTE_8_BIT
-      int subpixel = int(icoord.x / RESOLUTION_SCALE) & 1;
+      int subpixel = int(icoord.x) & 1;
       uint vram_value = RGBA8ToRGBA5551(color);
       int palette_index = int((vram_value >> (subpixel * 8)) & 0xFFu);
     #endif
-    ivec2 palette_icoord = ivec2(v_texpage.z + (palette_index * RESOLUTION_SCALE), fixYCoord(v_texpage.w));
+    ivec2 palette_icoord = ivec2((v_texpage.z + palette_index) * RESOLUTION_SCALE,
+                                 fixYCoord(v_texpage.w * RESOLUTION_SCALE));
     color = texelFetch(samp0, palette_icoord, 0);
   #endif
 
   return color;
 }
+
+struct VRAMSampleResult
+{
+  vec4 color;
+  float mask;
+};
+
+VRAMSampleResult SampleFromVRAM(vec2 coord)
+{
+  // from 0..1 to 0..255
+  ivec2 icoord = ivec2(coord * vec2(255.0));
+  icoord = ApplyTextureWindow(icoord);
+  vec4 sample = SampleVRAMCoordinates(icoord);
+
+  VRAMSampleResult res;
+  res.color = vec4(sample.xyz, float(sample != TRANSPARENT_PIXEL_COLOR));
+  res.mask = sample.a;
+  return res;
+}
+
+VRAMSampleResult SampleFromVRAMFiltered(vec2 coords)
+{
+  vec2 ficoords = coords - vec2(0.5);
+  vec2 s = fract(ficoords);
+  ivec2 icoord = ivec2(ficoords);
+
+  // Take 4 samples.
+  vec4 tl = SampleVRAMCoordinates(ApplyTextureWindow(icoord));
+  vec4 tr = SampleVRAMCoordinates(ApplyTextureWindow(icoord + ivec2(1, 0)));
+  vec4 bl = SampleVRAMCoordinates(ApplyTextureWindow(icoord + ivec2(0, 1)));
+  vec4 br = SampleVRAMCoordinates(ApplyTextureWindow(icoord + ivec2(1, 1)));
+
+  // Don't interpolate the alpha channel, since this is used for masking.
+  VRAMSampleResult res;
+  res.mask = min(tl.a, min(tr.a, min(bl.a, br.a)));
+
+  // Compute alpha from how many texels aren't pixel color 0000h.
+  tl.a = float(tl != TRANSPARENT_PIXEL_COLOR);
+  tr.a = float(tr != TRANSPARENT_PIXEL_COLOR);
+  bl.a = float(bl != TRANSPARENT_PIXEL_COLOR);
+  br.a = float(br != TRANSPARENT_PIXEL_COLOR);
+  res.color = mix(mix(tl, tr, s.x), mix(bl, br, s.x), s.y);
+  //res.color.a = min(tl.a, min(tr.a, min(bl.a, br.a)));
+
+  //res.color.rgb = vec3(s.x, s.y, 0.0);
+  return res;
+}
+
 #endif
 
 void main()
 {
   #if TEXTURED
-    vec4 texcol = SampleFromVRAM(v_tex0);
-    if (texcol == vec4(0.0, 0.0, 0.0, 0.0))
+    #if BILINEAR_FILTERING
+      VRAMSampleResult texcol = SampleFromVRAMFiltered(v_tex0);
+    #else
+      VRAMSampleResult texcol = SampleFromVRAM(v_tex0);
+    #endif
+
+    // Alpha culling for fully transparent pixels.
+    float alpha = texcol.color.a;
+    if (alpha == 0.0)
       discard;
 
+    float new_alpha = texcol.mask;
     vec3 color;
     #if BLENDING
-      color = vec3((ivec3(v_col0 * 255.0) * ivec3(texcol.rgb * 255.0)) >> 7) / 255.0;
+      color = vec3((ivec3(v_col0 * 255.0) * ivec3(texcol.color.rgb * 255.0)) >> 7) / 255.0;
     #else
-      color = texcol.rgb;
+      color = texcol.color.rgb;
     #endif
 
     #if TRANSPARENT
       // Apply semitransparency. If not a semitransparent texel, destination alpha is ignored.
-      if (texcol.a != 0)
+      if (texcol.mask != 0.0)
       {
         #if TRANSPARENT_ONLY_OPAQUE
           discard;
         #endif
-        o_col0 = vec4(color * u_transparent_alpha.x, u_transparent_alpha.y);
+ 
+        // Blend the destination weight with the alpha from the incoming pixel.
+        float src_alpha_factor = u_transparent_alpha.x * alpha;
+        float dst_alpha_factor = u_transparent_alpha.y / alpha;
+        o_col0 = vec4(color * src_alpha_factor, new_alpha);
+        o_col1 = vec4(0.0, 0.0, 0.0, dst_alpha_factor);
       }
       else
       {
         #if TRANSPARENT_ONLY_TRANSPARENT
           discard;
         #endif
-        o_col0 = vec4(color, 0.0);
+
+        o_col0 = vec4(color * alpha, new_alpha);
+        o_col1 = vec4(0.0, 0.0, 0.0, 1.0 - alpha);
       }
     #else
       // Mask bit from texture.
-      o_col0 = vec4(color, texcol.a);
+      o_col0 = vec4(color * alpha, new_alpha);
+      #if USE_DUAL_SOURCE_BLEND
+        o_col1 = vec4(0.0, 0.0, 0.0, 1.0 - alpha);
+      #endif
     #endif
   #else
+    // Mask bit is cleared for untextured polygons.
+    float new_alpha = 0.0;
     #if TRANSPARENT
-      o_col0 = vec4(v_col0 * u_transparent_alpha.x, u_transparent_alpha.y);
+      o_col0 = vec4(v_col0 * u_transparent_alpha.x, new_alpha);
+      o_col1 = vec4(0.0, 0.0, 0.0, u_transparent_alpha.y);
     #else
-      // Mask bit is cleared for untextured polygons.
-      o_col0 = vec4(v_col0, 0.0);
+      o_col0 = vec4(v_col0, new_alpha);
     #endif
   #endif
 }
