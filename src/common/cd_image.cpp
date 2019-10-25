@@ -149,8 +149,9 @@ u32 CDImage::Read(ReadMode read_mode, u32 sector_count, void* buffer)
 
 const CDImage::Index* CDImage::GetIndexForDiscPosition(LBA pos)
 {
-  for (const Index& index : m_indices)
+  for (u32 i = 0; i < static_cast<u32>(m_indices.size()); i++)
   {
+    const Index& index = m_indices[i];
     if (pos < index.start_lba_on_disc)
       continue;
 

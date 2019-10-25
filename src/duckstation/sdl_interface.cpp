@@ -777,6 +777,22 @@ void SDLInterface::DrawMainMenuBar()
 
     if (ImGui::BeginMenu("GPU", system_enabled))
     {
+      if (ImGui::BeginMenu("Renderer"))
+      {
+        const GPURenderer current = m_system->GetSettings().gpu_renderer;
+        for (const auto& it : Settings::GPU_RENDERERS)
+        {
+          if (ImGui::MenuItem(it.second, nullptr, current == it.first))
+          {
+            Settings new_settings = m_system->GetSettings();
+            new_settings.gpu_renderer = it.first;
+            m_system->SetSettings(new_settings);
+          }
+        }
+
+        ImGui::EndMenu();
+      }
+
       if (ImGui::BeginMenu("Internal Resolution"))
       {
         const u32 current_internal_resolution = m_system->GetSettings().gpu_resolution_scale;
@@ -786,8 +802,9 @@ void SDLInterface::DrawMainMenuBar()
                 TinyString::FromFormat("%ux (%ux%u)", scale, scale * GPU::VRAM_WIDTH, scale * GPU::VRAM_HEIGHT),
                 nullptr, current_internal_resolution == scale))
           {
-            m_system->GetSettings().gpu_resolution_scale = scale;
-            m_system->UpdateSettings();
+            Settings new_settings = m_system->GetSettings();
+            new_settings.gpu_resolution_scale = scale;
+            m_system->SetSettings(new_settings);
           }
         }
 

@@ -1,4 +1,5 @@
 #include "system.h"
+#include "YBaseLib/AutoReleasePtr.h"
 #include "YBaseLib/Log.h"
 #include "bus.h"
 #include "cdrom.h"
@@ -23,8 +24,6 @@ System::System(HostInterface* host_interface, const Settings& settings)
   m_bus = std::make_unique<Bus>();
   m_dma = std::make_unique<DMA>();
   m_interrupt_controller = std::make_unique<InterruptController>();
-  // m_gpu = std::make_unique<GPU>();
-  m_gpu = GPU::CreateHardwareOpenGLRenderer();
   m_cdrom = std::make_unique<CDROM>();
   m_pad = std::make_unique<Pad>();
   m_timers = std::make_unique<Timers>();
@@ -34,9 +33,38 @@ System::System(HostInterface* host_interface, const Settings& settings)
 
 System::~System() = default;
 
-void System::UpdateSettings()
+void System::SetSettings(Settings& new_settings)
 {
-  m_gpu->UpdateSettings();
+  if (m_settings.gpu_renderer != new_settings.gpu_renderer)
+  {
+    // switching renderers
+    m_settings.gpu_renderer = new_settings.gpu_renderer;
+
+    // save current state
+    AutoReleasePtr<ByteStream> state_stream = ByteStream_CreateGrowableMemoryStream();
+    StateWrapper sw(state_stream, StateWrapper::Mode::Write);
+    const bool state_valid = m_gpu->DoState(sw);
+    if (!state_valid)
+      Log_ErrorPrintf("Failed to save old GPU state when switching renderers");
+
+    // create new renderer
+    m_gpu.reset();
+    if (!CreateGPU())
+      Panic("Failed to recreate GPU");
+
+    if (state_valid)
+    {
+      state_stream->SeekAbsolute(0);
+      sw.SetMode(StateWrapper::Mode::Read);
+      m_gpu->DoState(sw);
+    }
+  }
+
+  if (m_settings.gpu_resolution_scale != new_settings.gpu_resolution_scale)
+  {
+    m_settings.gpu_resolution_scale = new_settings.gpu_resolution_scale;
+    m_gpu->UpdateSettings();
+  }
 }
 
 bool System::Initialize()
@@ -59,7 +87,7 @@ bool System::Initialize()
   if (!m_interrupt_controller->Initialize(m_cpu.get()))
     return false;
 
-  if (!m_gpu->Initialize(this, m_dma.get(), m_interrupt_controller.get(), m_timers.get()))
+  if (!CreateGPU())
     return false;
 
   if (!m_cdrom->Initialize(this, m_dma.get(), m_interrupt_controller.get(), m_spu.get()))
@@ -77,6 +105,35 @@ bool System::Initialize()
   if (!m_mdec->Initialize(this, m_dma.get()))
     return false;
 
+  return true;
+}
+
+bool System::CreateGPU()
+{
+  switch (m_settings.gpu_renderer)
+  {
+    case GPURenderer::HardwareOpenGL:
+      m_gpu = GPU::CreateHardwareOpenGLRenderer();
+      break;
+
+    case GPURenderer::Software:
+    default:
+      m_gpu = GPU::CreateSoftwareRenderer();
+      break;
+  }
+
+  if (!m_gpu || !m_gpu->Initialize(this, m_dma.get(), m_interrupt_controller.get(), m_timers.get()))
+  {
+    Log_ErrorPrintf("Failed to initialize GPU, falling back to software");
+    m_gpu.reset();
+    m_settings.gpu_renderer = GPURenderer::Software;
+    m_gpu = GPU::CreateSoftwareRenderer();
+    if (!m_gpu->Initialize(this, m_dma.get(), m_interrupt_controller.get(), m_timers.get()))
+      return false;
+  }
+
+  m_bus->SetGPU(m_gpu.get());
+  m_dma->SetGPU(m_gpu.get());
   return true;
 }
 

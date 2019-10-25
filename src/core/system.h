@@ -42,7 +42,7 @@ public:
   void IncrementInternalFrameNumber() { m_internal_frame_number++; }
 
   Settings& GetSettings() { return m_settings; }
-  void UpdateSettings();
+  void SetSettings(Settings& new_settings);
 
   bool Initialize();
   void Reset();
@@ -73,6 +73,7 @@ public:
 
 private:
   bool DoState(StateWrapper& sw);
+  bool CreateGPU();
 
   HostInterface* m_host_interface;
   std::unique_ptr<CPU::Core> m_cpu;

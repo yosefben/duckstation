@@ -22,12 +22,6 @@ protected:
     u32 texpage;
     u16 texcoord;
     u16 padding;
-
-    static constexpr std::tuple<u8, u8> DecodeTexcoord(u16 texcoord)
-    {
-      return std::make_tuple(static_cast<u8>(texcoord), static_cast<u8>(texcoord >> 8));
-    }
-    static constexpr u16 EncodeTexcoord(u8 x, u8 y) { return ZeroExtend16(x) | (ZeroExtend16(y) << 8); }
   };
 
   struct HWRenderBatch
