@@ -346,6 +346,15 @@ struct Cop0Registers
     BitField<u32, bool, 31, 1> super_master_enable_2;
 
     static constexpr u32 WRITE_MASK = 0b1111'1111'1000'0000'1111'0000'0011'1111;
+
+    ALWAYS_INLINE bool IsExecutionBreakpointEnabled() const
+    {
+      static constexpr u32 mask = decltype(super_master_enable_1)::GetMask() |
+                                  decltype(execution_breakpoint_enable)::GetMask() |
+                                  decltype(master_enable_break)::GetMask() | decltype(super_master_enable_2)::GetMask();
+      //return super_master_enable_1 && execution_breakpoint_enable && master_enable_break && super_master_enable_2;
+      return (bits & mask) == mask;
+    }
   } dcic;
 };
 

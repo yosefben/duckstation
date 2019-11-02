@@ -92,6 +92,7 @@ private:
 
   // Fetches the instruction at m_regs.npc
   bool FetchInstruction();
+  bool CheckForExecuteBreakpoint();
   void ExecuteInstruction();
   void ExecuteCop0Instruction();
   void ExecuteCop2Instruction();

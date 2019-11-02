@@ -559,7 +559,8 @@ void Core::Execute()
 #endif
 
     // execute the instruction we previously fetched
-    ExecuteInstruction();
+    if (!CheckForExecuteBreakpoint())
+      ExecuteInstruction();
 
     // next load delay
     m_load_delay_reg = m_next_load_delay_reg;
@@ -581,6 +582,20 @@ bool Core::FetchInstruction()
 
   m_regs.pc = m_regs.npc;
   m_regs.npc += sizeof(m_next_instruction.bits);
+  return true;
+}
+
+bool Core::CheckForExecuteBreakpoint()
+{
+  if (!m_cop0_regs.dcic.IsExecutionBreakpointEnabled())
+    return false;
+
+  if (((m_current_instruction_pc ^ m_cop0_regs.BPC) & m_cop0_regs.BPCM) != 0)
+    return false;
+
+  m_cop0_regs.dcic.status_any_break = true;
+  m_cop0_regs.dcic.status_bpc_code_break = true;
+  RaiseException(Exception::BP);
   return true;
 }
 

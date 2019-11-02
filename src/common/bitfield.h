@@ -16,7 +16,7 @@ struct BitField
   // We have to delete the copy assignment operator otherwise we can't use this class in anonymous structs/unions.
   BitField& operator=(const BitField& rhs) = delete;
 
-  ALWAYS_INLINE constexpr BackingDataType GetMask() const
+  ALWAYS_INLINE static constexpr BackingDataType GetMask()
   {
     return ((static_cast<BackingDataType>(~0)) >> (8 * sizeof(BackingDataType) - BitCount)) << BitIndex;
   }
