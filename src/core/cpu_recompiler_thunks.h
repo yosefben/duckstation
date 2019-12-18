@@ -47,6 +47,7 @@ public:
   static void ExecuteGTEInstruction(Core* cpu, u32 instruction_bits);
   static u32 ReadGTERegister(Core* cpu, u32 reg);
   static void WriteGTERegister(Core* cpu, u32 reg, u32 value);
+  static void UpdateFastmemMapping(Core* cpu);
 };
 
 class ASMFunctions

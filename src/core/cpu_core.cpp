@@ -3,6 +3,7 @@
 #include "common/log.h"
 #include "common/state_wrapper.h"
 #include "cpu_disasm.h"
+#include "system.h"
 #include <cstdio>
 Log_SetChannel(CPU::Core);
 
@@ -38,8 +39,9 @@ Core::Core() = default;
 
 Core::~Core() = default;
 
-void Core::Initialize(Bus* bus)
+void Core::Initialize(System* system, Bus* bus)
 {
+  m_system = system;
   m_bus = bus;
 
   // From nocash spec.

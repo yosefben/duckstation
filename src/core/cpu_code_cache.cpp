@@ -23,22 +23,15 @@ CodeCache::~CodeCache()
 {
   if (m_system)
     Flush();
+
+  ShutdownFastmem();
 }
 
-void CodeCache::Initialize(System* system, Core* core, Bus* bus, bool use_recompiler)
+void CodeCache::Initialize(System* system, Core* core, Bus* bus)
 {
   m_system = system;
   m_core = core;
   m_bus = bus;
-
-#ifdef WITH_RECOMPILER
-  m_use_recompiler = use_recompiler;
-  m_code_buffer = std::make_unique<JitCodeBuffer>(RECOMPILER_CODE_CACHE_SIZE, RECOMPILER_FAR_CODE_CACHE_SIZE);
-  m_asm_functions = std::make_unique<Recompiler::ASMFunctions>();
-  m_asm_functions->Generate(m_code_buffer.get());
-#else
-  m_use_recompiler = false;
-#endif
 }
 
 void CodeCache::Execute()
@@ -67,7 +60,7 @@ void CodeCache::Execute()
 
 #if 0
     const u32 tick = m_system->GetGlobalTickCounter() + m_core->GetPendingTicks();
-    if (tick == 61033207)
+    if (tick == 17426)
       __debugbreak();
 #endif
 
@@ -129,14 +122,29 @@ void CodeCache::Execute()
   m_core->m_regs.npc = m_core->m_regs.pc;
 }
 
-void CodeCache::SetUseRecompiler(bool enable)
+void CodeCache::SetUseRecompiler(bool enable, bool fastmem)
 {
 #ifdef WITH_RECOMPILER
-  if (m_use_recompiler == enable)
+  if (m_use_recompiler == enable && m_fastmem == fastmem)
     return;
 
-  m_use_recompiler = enable;
   Flush();
+
+  ShutdownFastmem();
+  m_asm_functions.reset();
+  m_code_buffer.reset();
+
+  m_use_recompiler = enable;
+  m_fastmem = fastmem;
+
+  if (enable)
+  {
+    m_code_buffer = std::make_unique<JitCodeBuffer>(RECOMPILER_CODE_CACHE_SIZE, RECOMPILER_FAR_CODE_CACHE_SIZE);
+    m_asm_functions = std::make_unique<Recompiler::ASMFunctions>();
+    m_asm_functions->Generate(m_code_buffer.get());
+  }
+
+  InitializeFastmem();
 #endif
 }
 
@@ -149,8 +157,10 @@ void CodeCache::Flush()
   for (const auto& it : m_blocks)
     delete it.second;
   m_blocks.clear();
+  m_host_code_map.clear();
 #ifdef WITH_RECOMPILER
-  m_code_buffer->Reset();
+  if (m_code_buffer)
+    m_code_buffer->Reset();
 #endif
 }
 
@@ -202,7 +212,9 @@ CodeBlock* CodeCache::LookupBlock(CodeBlockKey key)
     block = nullptr;
   }
 
-  iter = m_blocks.emplace(key.bits, block).first;
+  m_blocks.emplace(key.bits, block);
+  AddBlockToHostCodeMap(block);
+
   return block;
 }
 
@@ -227,6 +239,8 @@ bool CodeCache::RevalidateBlock(CodeBlock* block)
   return true;
 
 recompile:
+  RemoveBlockFromHostCodeMap(block);
+
   block->instructions.clear();
   if (!CompileBlock(block))
   {
@@ -236,6 +250,7 @@ recompile:
   }
 
   // re-add to page map again
+  AddBlockToHostCodeMap(block);
   if (block->IsInRAM())
     AddBlockToPageMap(block);
 
@@ -273,6 +288,9 @@ bool CodeCache::CompileBlock(CodeBlock* block)
     cbi.is_store_instruction = IsMemoryStoreInstruction(cbi.instruction);
     cbi.has_load_delay = InstructionHasLoadDelay(cbi.instruction);
     cbi.can_trap = CanInstructionTrap(cbi.instruction, m_core->InUserMode());
+
+    block->contains_loadstore_instructions |= cbi.is_load_instruction;
+    block->contains_loadstore_instructions |= cbi.is_store_instruction;
 
     // instruction is decoded now
     block->instructions.push_back(cbi);
@@ -328,7 +346,7 @@ bool CodeCache::CompileBlock(CodeBlock* block)
       Flush();
     }
 
-    Recompiler::CodeGenerator codegen(m_core, m_code_buffer.get(), *m_asm_functions.get());
+    Recompiler::CodeGenerator codegen(m_core, m_code_buffer.get(), *m_asm_functions.get(), m_fastmem);
     if (!codegen.CompileBlock(block, &block->host_code, &block->host_code_size))
     {
       Log_ErrorPrintf("Failed to compile host code for block at 0x%08X", block->key.GetPC());
@@ -366,6 +384,8 @@ void CodeCache::FlushBlock(CodeBlock* block)
   if (block->invalidated)
     RemoveBlockFromPageMap(block);
 
+  RemoveBlockFromHostCodeMap(block);
+
   m_blocks.erase(iter);
   delete block;
 }
@@ -398,6 +418,25 @@ void CodeCache::RemoveBlockFromPageMap(CodeBlock* block)
     Assert(page_block_iter != page_blocks.end());
     page_blocks.erase(page_block_iter);
   }
+}
+
+void CodeCache::AddBlockToHostCodeMap(CodeBlock* block)
+{
+  if (!m_use_recompiler)
+    return;
+
+  auto ir = m_host_code_map.emplace(block->host_code, block);
+  Assert(ir.second);
+}
+
+void CodeCache::RemoveBlockFromHostCodeMap(CodeBlock* block)
+{
+  if (!m_use_recompiler)
+    return;
+
+  HostCodeMap::iterator hc_iter = m_host_code_map.find(block->host_code);
+  Assert(hc_iter != m_host_code_map.end());
+  m_host_code_map.erase(hc_iter);
 }
 
 void CodeCache::LinkBlock(CodeBlock* from, CodeBlock* to)
@@ -502,6 +541,95 @@ void CodeCache::InterpretUncachedBlock()
 
     in_branch_delay_slot = branch;
   }
+}
+
+bool CodeCache::InitializeFastmem()
+{
+  if (!m_use_recompiler || !m_fastmem)
+    return true;
+
+  if (!Common::PageFaultHandler::InstallHandler(this,
+                                                std::bind(&CodeCache::PageFaultHandler, this, std::placeholders::_1,
+                                                          std::placeholders::_2, std::placeholders::_3)))
+  {
+    Log_ErrorPrintf("Failed to install page fault handler");
+    return false;
+  }
+
+  m_bus->UpdateFastmemViews(true, m_core->m_cop0_regs.sr.Isc);
+  return true;
+}
+
+void CodeCache::ShutdownFastmem()
+{
+  if (!m_use_recompiler || !m_fastmem)
+    return;
+
+  Common::PageFaultHandler::RemoveHandler(this);
+  m_bus->UpdateFastmemViews(false, false);
+}
+
+Common::PageFaultHandler::HandlerResult CodeCache::PageFaultHandler(void* exception_pc, void* fault_address,
+                                                                    bool is_write)
+{
+  if (static_cast<u8*>(fault_address) < m_core->m_fastmem_base ||
+      (static_cast<u8*>(fault_address) - m_core->m_fastmem_base) >= Bus::FASTMEM_REGION_SIZE)
+  {
+    return Common::PageFaultHandler::HandlerResult::ExecuteNextHandler;
+  }
+
+  const PhysicalMemoryAddress fastmem_address = static_cast<PhysicalMemoryAddress>(
+    static_cast<ptrdiff_t>(static_cast<u8*>(fault_address) - m_core->m_fastmem_base));
+
+  Log_DevPrintf("Page fault handler invoked at PC=%p Address=%p %s, fastmem offset 0x%08X", exception_pc, fault_address,
+                is_write ? "(write)" : "(read)", fastmem_address);
+
+  if (is_write && !m_core->m_cop0_regs.sr.Isc && m_bus->IsRAMAddress(fastmem_address))
+  {
+    // this is probably a code page, since we aren't going to fault due to requiring fastmem on RAM.
+    const u32 code_page_index = m_bus->GetRAMCodePageIndex(fastmem_address);
+    if (m_bus->IsRAMCodePage(code_page_index))
+    {
+      InvalidateBlocksWithPageIndex(code_page_index);
+      return Common::PageFaultHandler::HandlerResult::ContinueExecution;
+    }
+  }
+
+  // use upper_bound to find the next block after the pc
+  HostCodeMap::iterator upper_iter =
+    m_host_code_map.upper_bound(reinterpret_cast<CodeBlock::HostCodePointer>(exception_pc));
+  if (upper_iter == m_host_code_map.begin())
+    return Common::PageFaultHandler::HandlerResult::ExecuteNextHandler;
+
+  // then decrement it by one to (hopefully) get the block we want
+  upper_iter--;
+
+  // find the loadstore info in the code block
+  CodeBlock* block = upper_iter->second;
+  for (auto bpi_iter = block->loadstore_backpatch_info.begin(); bpi_iter != block->loadstore_backpatch_info.end();
+       ++bpi_iter)
+  {
+    const Recompiler::LoadStoreBackpatchInfo& lbi = *bpi_iter;
+    if (lbi.host_pc == exception_pc)
+    {
+      // found it, do fixup
+      if (Recompiler::CodeGenerator::BackpatchLoadStore(lbi))
+      {
+        // remove the backpatch entry since we won't be coming back to this one
+        block->loadstore_backpatch_info.erase(bpi_iter);
+        return Common::PageFaultHandler::HandlerResult::ContinueExecution;
+      }
+      else
+      {
+        Log_ErrorPrintf("Failed to backpatch %p in block 0x%08X", exception_pc, block->GetPC());
+        return Common::PageFaultHandler::HandlerResult::ExecuteNextHandler;
+      }
+    }
+  }
+
+  // we didn't find the pc in our list..
+  Log_ErrorPrintf("Loadstore PC not found for %p in block 0x%08X", exception_pc, block->GetPC());
+  return Common::PageFaultHandler::HandlerResult::ExecuteNextHandler;
 }
 
 } // namespace CPU

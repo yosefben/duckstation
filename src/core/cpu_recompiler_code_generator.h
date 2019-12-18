@@ -16,14 +16,16 @@ namespace CPU::Recompiler {
 class CodeGenerator
 {
 public:
-  CodeGenerator(Core* cpu, JitCodeBuffer* code_buffer, const ASMFunctions& asm_functions);
+  CodeGenerator(Core* cpu, JitCodeBuffer* code_buffer, const ASMFunctions& asm_functions, bool fastmem);
   ~CodeGenerator();
 
   static u32 CalculateRegisterOffset(Reg reg);
   static const char* GetHostRegName(HostReg reg, RegSize size = HostPointerSize);
   static void AlignCodeBuffer(JitCodeBuffer* code_buffer);
 
-  bool CompileBlock(const CodeBlock* block, CodeBlock::HostCodePointer* out_host_code, u32* out_host_code_size);
+  static bool BackpatchLoadStore(const LoadStoreBackpatchInfo& lbi);
+
+  bool CompileBlock(CodeBlock* block, CodeBlock::HostCodePointer* out_host_code, u32* out_host_code_size);
 
   //////////////////////////////////////////////////////////////////////////
   // Code Generation
@@ -65,7 +67,9 @@ public:
 
   // Automatically generates an exception handler.
   Value EmitLoadGuestMemory(const CodeBlockInstruction& cbi, const Value& address, RegSize size);
+  Value EmitLoadGuestMemorySlowmem(const CodeBlockInstruction& cbi, const Value& address, RegSize size, Value result);
   void EmitStoreGuestMemory(const CodeBlockInstruction& cbi, const Value& address, const Value& value);
+  void EmitStoreGuestMemorySlowmem(const CodeBlockInstruction& cbi, const Value& address, const Value& value);
 
   // Unconditional branch to pointer. May allocate a scratch register.
   void EmitBranch(const void* address, bool allow_scratch = true);
@@ -191,15 +195,19 @@ private:
   Core* m_cpu;
   JitCodeBuffer* m_code_buffer;
   const ASMFunctions& m_asm_functions;
-  const CodeBlock* m_block = nullptr;
+  CodeBlock* m_block = nullptr;
   const CodeBlockInstruction* m_block_start = nullptr;
   const CodeBlockInstruction* m_block_end = nullptr;
+  const CodeBlockInstruction* m_current_instruction = nullptr;
   RegisterCache m_register_cache;
   CodeEmitter m_near_emitter;
   CodeEmitter m_far_emitter;
   CodeEmitter* m_emit;
 
   TickCount m_delayed_cycles_add = 0;
+
+  // options
+  bool m_fastmem = false;
 
   // whether various flags need to be reset.
   bool m_current_instruction_in_branch_delay_slot_dirty = false;

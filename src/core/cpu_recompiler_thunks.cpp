@@ -164,4 +164,9 @@ void Thunks::WriteGTERegister(Core* cpu, u32 reg, u32 value)
   cpu->m_cop2.WriteRegister(reg, value);
 }
 
+void Thunks::UpdateFastmemMapping(Core* cpu)
+{
+  cpu->m_bus->UpdateFastmemViews(true, cpu->m_cop0_regs.sr.Isc);
+}
+
 } // namespace CPU::Recompiler

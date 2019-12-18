@@ -129,7 +129,7 @@ void System::SetCPUExecutionMode(CPUExecutionMode mode)
 {
   m_cpu_execution_mode = mode;
   m_cpu_code_cache->Flush();
-  m_cpu_code_cache->SetUseRecompiler(mode == CPUExecutionMode::Recompiler);
+  m_cpu_code_cache->SetUseRecompiler(mode == CPUExecutionMode::Recompiler, GetSettings().cpu_fastmem);
 }
 
 bool System::Boot(const SystemBootParameters& params)
@@ -206,6 +206,13 @@ bool System::Boot(const SystemBootParameters& params)
     return false;
   }
 
+  // Allocate memory.
+  if (!m_bus->AllocateMemory())
+  {
+    m_host_interface->ReportError("Failed to allocate memory");
+    return false;
+  }
+
   // Component setup.
   if (!InitializeComponents(params.force_software_renderer))
     return false;
@@ -255,8 +262,7 @@ bool System::InitializeComponents(bool force_software_renderer)
   if (!CreateGPU(force_software_renderer ? GPURenderer::Software : settings.gpu_renderer))
     return false;
 
-  m_cpu->Initialize(m_bus.get());
-  m_cpu_code_cache->Initialize(this, m_cpu.get(), m_bus.get(), m_cpu_execution_mode == CPUExecutionMode::Recompiler);
+  m_cpu->Initialize(this, m_bus.get());
   m_bus->Initialize(m_cpu.get(), m_cpu_code_cache.get(), m_dma.get(), m_interrupt_controller.get(), m_gpu.get(),
                     m_cdrom.get(), m_pad.get(), m_timers.get(), m_spu.get(), m_mdec.get(), m_sio.get());
 
@@ -273,6 +279,9 @@ bool System::InitializeComponents(bool force_software_renderer)
 
   // load settings
   m_cpu->GetCop2().SetWidescreenHack(settings.gpu_widescreen_hack);
+
+  m_cpu_code_cache->Initialize(this, m_cpu.get(), m_bus.get());
+  m_cpu_code_cache->SetUseRecompiler(m_cpu_execution_mode == CPUExecutionMode::Recompiler, GetSettings().cpu_fastmem);
 
   UpdateThrottlePeriod();
   return true;

@@ -99,6 +99,12 @@
       <Filter>vulkan</Filter>
     </ClInclude>
     <ClInclude Include="image.h" />
+=======
+=======
+    <ClInclude Include="memory_arena.h" />
+    <ClInclude Include="page_fault_handler.h" />
+>>>>>>> wip
+>>>>>>> ab75b816... wip
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="jit_code_buffer.cpp" />
@@ -191,6 +197,12 @@
     </ClCompile>
     <ClCompile Include="image.cpp" />
     <ClCompile Include="cd_image_memory.cpp" />
+=======
+=======
+    <ClCompile Include="memory_arena.cpp" />
+    <ClCompile Include="page_fault_handler.cpp" />
+>>>>>>> wip
+>>>>>>> ab75b816... wip
   </ItemGroup>
   <ItemGroup>
     <Natvis Include="bitfield.natvis" />

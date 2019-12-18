@@ -34,7 +34,110 @@ ALWAYS_INLINE static void FixupUnalignedWordAccessW32(u32& offset, u32& value)
 
 Bus::Bus() = default;
 
-Bus::~Bus() = default;
+Bus::~Bus()
+{
+  m_fastmem_ram_views.clear();
+  if (m_ram)
+    m_memory_arena.ReleaseViewPtr(m_ram, RAM_SIZE);
+  if (m_bios)
+    m_memory_arena.ReleaseViewPtr(m_bios, BIOS_SIZE);
+}
+
+bool Bus::AllocateMemory()
+{
+  if (!m_memory_arena.Create(MEMORY_ARENA_SIZE, true, false))
+  {
+    Log_ErrorPrint("Failed to create memory arena");
+    return false;
+  }
+
+  // Create the base views.
+  m_ram = static_cast<u8*>(m_memory_arena.CreateViewPtr(MEMORY_ARENA_RAM_OFFSET, RAM_SIZE, true, false));
+  m_bios = static_cast<u8*>(m_memory_arena.CreateViewPtr(MEMORY_ARENA_BIOS_OFFSET, BIOS_SIZE, true, false));
+  if (!m_ram || !m_bios)
+  {
+    Log_ErrorPrint("Failed to create base views of memory");
+    return false;
+  }
+
+  return true;
+}
+
+void Bus::UpdateFastmemViews(bool enabled, bool isolate_cache)
+{
+  m_fastmem_ram_views.clear();
+  if (!enabled)
+  {
+    m_fastmem_base = nullptr;
+    return;
+  }
+
+  Log_DevPrintf("Remapping fastmem area, isolate cache = %s", isolate_cache ? "true " : "false");
+  if (!m_fastmem_base)
+  {
+    m_fastmem_base = static_cast<u8*>(m_memory_arena.FindBaseAddressForMapping(FASTMEM_REGION_SIZE));
+    if (!m_fastmem_base)
+    {
+      Log_ErrorPrint("Failed to find base address for fastmem");
+      return;
+    }
+
+    Log_InfoPrintf("Fastmem base: %p", m_fastmem_base);
+    m_cpu->SetFastmemBase(m_fastmem_base);
+  }
+
+  auto MapRAM = [this](u32 base_address) {
+    u8* map_address = m_fastmem_base + base_address;
+    auto view = m_memory_arena.CreateView(MEMORY_ARENA_RAM_OFFSET, RAM_SIZE, true, false, map_address);
+    if (!view)
+    {
+      Log_ErrorPrintf("Failed to map RAM at fastmem area %p (offset 0x%08X)", map_address, RAM_SIZE);
+      return;
+    }
+
+    // mark all pages with code as non-writable
+    for (u32 i = 0; i < CPU_CODE_CACHE_PAGE_COUNT; i++)
+    {
+      if (m_ram_code_bits[i])
+      {
+        u8* page_address = map_address + (i * CPU_CODE_CACHE_PAGE_SIZE);
+        if (!m_memory_arena.SetPageProtection(page_address, CPU_CODE_CACHE_PAGE_SIZE, true, false, false))
+        {
+          Log_ErrorPrintf("Failed to write-protect code page at %p");
+          return;
+        }
+      }
+    }
+
+    m_fastmem_ram_views.push_back(std::move(view.value()));
+  };
+  auto MapBIOS = [this](u32 base_address) {
+    u8* map_address = m_fastmem_base + base_address;
+    auto view = m_memory_arena.CreateView(MEMORY_ARENA_BIOS_OFFSET, BIOS_SIZE, false, false, map_address);
+    if (!view)
+    {
+      Log_ErrorPrintf("Failed to map BIOS at fastmem area %p (offset 0x%08X)", map_address, RAM_SIZE);
+      return;
+    }
+
+    m_fastmem_ram_views.push_back(std::move(view.value()));
+  };
+
+  if (!isolate_cache)
+  {
+    // KUSEG - cached
+    MapRAM(0x00000000);
+    // MapBIOS(0x1FC00000);
+
+    // KSEG0 - cached
+    MapRAM(0x80000000);
+    // MapBIOS(0x9FC00000);
+  }
+
+  // KSEG1 - uncached
+  MapRAM(0xA0000000);
+  // MapBIOS(0xBFC00000);
+}
 
 void Bus::Initialize(CPU::Core* cpu, CPU::CodeCache* cpu_code_cache, DMA* dma,
                      InterruptController* interrupt_controller, GPU* gpu, CDROM* cdrom, Pad* pad, Timers* timers,
@@ -55,7 +158,7 @@ void Bus::Initialize(CPU::Core* cpu, CPU::CodeCache* cpu_code_cache, DMA* dma,
 
 void Bus::Reset()
 {
-  std::memset(m_ram, 0, sizeof(m_ram));
+  std::memset(m_ram, 0, RAM_SIZE);
   m_MEMCTRL.exp1_base = 0x1F000000;
   m_MEMCTRL.exp2_base = 0x1F802000;
   m_MEMCTRL.exp1_delay_size.bits = 0x0013243F;
@@ -76,8 +179,8 @@ bool Bus::DoState(StateWrapper& sw)
   sw.Do(&m_bios_access_time);
   sw.Do(&m_cdrom_access_time);
   sw.Do(&m_spu_access_time);
-  sw.DoBytes(m_ram, sizeof(m_ram));
-  sw.DoBytes(m_bios, sizeof(m_bios));
+  sw.DoBytes(m_ram, RAM_SIZE);
+  sw.DoBytes(m_bios, BIOS_SIZE);
   sw.DoArray(m_MEMCTRL.regs, countof(m_MEMCTRL.regs));
   sw.Do(&m_ram_size_reg);
   sw.Do(&m_tty_line_buffer);
@@ -184,6 +287,74 @@ void Bus::SetBIOS(const std::vector<u8>& image)
   }
 
   std::memcpy(m_bios, image.data(), BIOS_SIZE);
+}
+
+void Bus::SetRAMCodePage(u32 index)
+{
+  if (m_ram_code_bits[index])
+    return;
+
+  // protect fastmem pages
+  m_ram_code_bits[index] = true;
+  SetCodePageFastmemProtection(index, false);
+}
+
+void Bus::ClearRAMCodePage(u32 index)
+{
+  if (!m_ram_code_bits[index])
+    return;
+
+  // unprotect fastmem pages
+  m_ram_code_bits[index] = false;
+  SetCodePageFastmemProtection(index, true);
+}
+
+void Bus::SetCodePageFastmemProtection(u32 page_index, bool writable)
+{
+  // unprotect fastmem pages
+  for (const auto& view : m_fastmem_ram_views)
+  {
+    u8* page_address = static_cast<u8*>(view.GetBasePointer()) + (page_index * CPU_CODE_CACHE_PAGE_SIZE);
+    if (!m_memory_arena.SetPageProtection(page_address, CPU_CODE_CACHE_PAGE_SIZE, true, writable, false))
+    {
+      Log_ErrorPrintf("Failed to %s code page %u (0x%08X) @ %p", writable ? "unprotect" : "protect", page_index,
+                      page_index * CPU_CODE_CACHE_PAGE_SIZE, page_address);
+    }
+  }
+}
+
+void Bus::ClearRAMCodePageFlags()
+{
+  m_ram_code_bits.reset();
+
+  // unprotect fastmem pages
+  for (const auto& view : m_fastmem_ram_views)
+  {
+    if (!m_memory_arena.SetPageProtection(view.GetBasePointer(), view.GetMappingSize(), true, true, false))
+    {
+      Log_ErrorPrintf("Failed to unprotect code pages for fastmem view @ %p", view.GetBasePointer());
+    }
+  }
+}
+
+bool Bus::HasCodePagesInRange(PhysicalMemoryAddress start_address, u32 size) const
+{
+  if (!IsRAMAddress(start_address))
+    return false;
+
+  start_address = UnmirrorAddress(start_address);
+
+  const u32 end_address = start_address + size;
+  while (start_address < end_address)
+  {
+    const u32 code_page_index = start_address / CPU_CODE_CACHE_PAGE_SIZE;
+    if (m_ram_code_bits[code_page_index])
+      return true;
+
+    start_address += CPU_CODE_CACHE_PAGE_SIZE;
+  }
+
+  return false;
 }
 
 std::tuple<TickCount, TickCount, TickCount> Bus::CalculateMemoryTiming(MEMDELAY mem_delay, COMDELAY common_delay)

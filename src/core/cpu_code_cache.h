@@ -1,10 +1,16 @@
 #pragma once
 #include "common/bitfield.h"
+#include "common/page_fault_handler.h"
 #include "cpu_types.h"
 #include <array>
+#include <map>
 #include <memory>
 #include <unordered_map>
 #include <vector>
+
+#ifdef WITH_RECOMPILER
+#include "cpu_recompiler_types.h"
+#endif
 
 class JitCodeBuffer;
 
@@ -70,6 +76,11 @@ struct CodeBlock
   std::vector<CodeBlock*> link_predecessors;
   std::vector<CodeBlock*> link_successors;
 
+#ifdef WITH_RECOMPILER
+  std::vector<Recompiler::LoadStoreBackpatchInfo> loadstore_backpatch_info;
+#endif
+
+  bool contains_loadstore_instructions = false;
   bool invalidated = false;
 
   const u32 GetPC() const { return key.GetPC(); }
@@ -92,20 +103,21 @@ public:
   CodeCache();
   ~CodeCache();
 
-  void Initialize(System* system, Core* core, Bus* bus, bool use_recompiler);
+  void Initialize(System* system, Core* core, Bus* bus);
   void Execute();
 
   /// Flushes the code cache, forcing all blocks to be recompiled.
   void Flush();
 
   /// Changes whether the recompiler is enabled.
-  void SetUseRecompiler(bool enable);
+  void SetUseRecompiler(bool enable, bool fastmem);
 
   /// Invalidates all blocks which are in the range of the specified code page.
   void InvalidateBlocksWithPageIndex(u32 page_index);
 
 private:
   using BlockMap = std::unordered_map<u32, CodeBlock*>;
+  using HostCodeMap = std::map<CodeBlock::HostCodePointer, CodeBlock*>;
 
   void LogCurrentState();
 
@@ -123,6 +135,8 @@ private:
   void FlushBlock(CodeBlock* block);
   void AddBlockToPageMap(CodeBlock* block);
   void RemoveBlockFromPageMap(CodeBlock* block);
+  void AddBlockToHostCodeMap(CodeBlock* block);
+  void RemoveBlockFromHostCodeMap(CodeBlock* block);
 
   /// Link block from to to.
   void LinkBlock(CodeBlock* from, CodeBlock* to);
@@ -132,6 +146,10 @@ private:
 
   void InterpretCachedBlock(const CodeBlock& block);
   void InterpretUncachedBlock();
+
+  bool InitializeFastmem();
+  void ShutdownFastmem();
+  Common::PageFaultHandler::HandlerResult PageFaultHandler(void* exception_pc, void* fault_address, bool is_write);
 
   System* m_system = nullptr;
   Core* m_core = nullptr;
@@ -143,8 +161,10 @@ private:
 #endif
 
   BlockMap m_blocks;
+  HostCodeMap m_host_code_map;
 
   bool m_use_recompiler = false;
+  bool m_fastmem = false;
 
   std::array<std::vector<CodeBlock*>, CPU_CODE_CACHE_PAGE_COUNT> m_ram_block_map;
 };
