@@ -13,9 +13,17 @@ Log_SetChannel(CPU::CodeCache);
 namespace CPU {
 
 constexpr bool USE_BLOCK_LINKING = true;
+constexpr bool USE_BRANCH_FOLLOWING = true;
+constexpr u32 BRANCH_FOLLOWING_THRESHOLD = 256;
 
 static constexpr u32 RECOMPILER_CODE_CACHE_SIZE = 32 * 1024 * 1024;
 static constexpr u32 RECOMPILER_FAR_CODE_CACHE_SIZE = 32 * 1024 * 1024;
+
+CodeBlockInstruction& CodeBlockInstruction::operator=(const CodeBlockInstruction& rhs)
+{
+  std::memcpy(this, &rhs, sizeof(CodeBlockInstruction));
+  return *this;
+}
 
 CodeCache::CodeCache() = default;
 
@@ -236,16 +244,45 @@ recompile:
   return true;
 }
 
+static void TruncateBlockAfterDelaySlot(CodeBlock* block, u32 start_index)
+{
+  u32 remove_start_pos = start_index;
+  while (remove_start_pos < block->instructions.size() && !block->instructions[remove_start_pos].is_branch_delay_slot)
+    remove_start_pos++;
+  if (remove_start_pos < block->instructions.size())
+    block->instructions.erase(block->instructions.begin() + remove_start_pos, block->instructions.end());
+}
+
+static void SwapInstructions(CodeBlock* block, u32 i1, u32 i2)
+{
+  // replace any intra-block references as well
+  for (CodeBlockInstruction& cbi : block->instructions)
+  {
+    if (!cbi.is_followable_branch)
+      continue;
+
+    if (cbi.branch_target_instruction_index == i1)
+      cbi.branch_target_instruction_index = i2;
+    if (cbi.branch_target_instruction_index == i2)
+      cbi.branch_target_instruction_index = i1;
+  }
+
+  std::swap(block->instructions[i1], block->instructions[i2]);
+}
+
 bool CodeCache::CompileBlock(CodeBlock* block)
 {
   u32 pc = block->GetPC();
   bool is_branch_delay_slot = false;
   bool is_load_delay_slot = false;
+  bool following_branch = false;
 
 #if 0
   if (pc == 0x0005aa90)
     __debugbreak();
 #endif
+
+  u32 block_end_pc = pc;
 
   for (;;)
   {
@@ -267,6 +304,14 @@ bool CodeCache::CompileBlock(CodeBlock* block)
     cbi.is_store_instruction = IsMemoryStoreInstruction(cbi.instruction);
     cbi.has_load_delay = InstructionHasLoadDelay(cbi.instruction);
     cbi.can_trap = CanInstructionTrap(cbi.instruction, m_core->InUserMode());
+    cbi.is_followable_branch =
+      cbi.is_branch_instruction && USE_BRANCH_FOLLOWING &&
+      IsFollowableBranchInstruction(cbi.instruction, pc, block->GetPC(), BRANCH_FOLLOWING_THRESHOLD);
+    if (cbi.is_followable_branch)
+    {
+      cbi.static_branch_target_pc = GetBranchInstructionTarget(cbi.instruction, pc);
+      block_end_pc = std::max(block_end_pc, cbi.static_branch_target_pc);
+    }
 
     // instruction is decoded now
     block->instructions.push_back(cbi);
@@ -275,39 +320,102 @@ bool CodeCache::CompileBlock(CodeBlock* block)
     // if we're in a branch delay slot, the block is now done
     // except if this is a branch in a branch delay slot, then we grab the one after that, and so on...
     if (is_branch_delay_slot && !cbi.is_branch_instruction)
-      break;
+    {
+      if (pc > block_end_pc)
+        break;
+    }
 
     // if this is a branch, we grab the next instruction (delay slot), and then exit
     is_branch_delay_slot = cbi.is_branch_instruction;
 
     // same for load delay
     is_load_delay_slot = cbi.has_load_delay;
+    following_branch = cbi.is_followable_branch;
 
     // is this a non-branchy exit? (e.g. syscall)
-    if (IsExitBlockInstruction(cbi.instruction))
-      break;
-  }
-
-  if (!block->instructions.empty())
-  {
-    block->instructions.back().is_last_instruction = true;
-
-#ifdef _DEBUG
-    SmallString disasm;
-    Log_DebugPrintf("Block at 0x%08X", block->GetPC());
-    for (const CodeBlockInstruction& cbi : block->instructions)
+    cbi.is_exit_block_instruction = IsExitBlockInstruction(cbi.instruction);
+    if (cbi.is_exit_block_instruction)
     {
-      CPU::DisassembleInstruction(&disasm, cbi.pc, cbi.instruction.bits, nullptr);
-      Log_DebugPrintf("[%s %s 0x%08X] %08X %s", cbi.is_branch_delay_slot ? "BD" : "  ",
-                      cbi.is_load_delay_slot ? "LD" : "  ", cbi.pc, cbi.instruction.bits, disasm.GetCharArray());
+      if (pc > block_end_pc)
+        break;
     }
-#endif
   }
-  else
+
+  if (block->instructions.empty())
   {
     Log_WarningPrintf("Empty block compiled at 0x%08X", block->key.GetPC());
     return false;
   }
+
+  // resolve any intra-block references
+  for (u32 i = 0; i < static_cast<u32>(block->instructions.size()); i++)
+  {
+    CodeBlockInstruction& cbi = block->instructions[i];
+    if (!cbi.is_branch_instruction)
+      continue;
+
+    cbi.branch_target_instruction_index = u32(-1);
+    if (cbi.is_followable_branch)
+    {
+      // stop at double branches - they're evil
+      if ((i + 1) >= block->instructions.size() || block->instructions[i + 1].is_branch_instruction)
+      {
+        Log_WarningPrintf("Not following double-branch PC at 0x%08X", cbi.pc);
+        TruncateBlockAfterDelaySlot(block, i + 1);
+      }
+
+      const u32 branch_target = cbi.static_branch_target_pc;
+      for (u32 j = 0; j < static_cast<u32>(block->instructions.size()); j++)
+      {
+        if (block->instructions[j].pc == branch_target)
+        {
+          block->instructions[j].is_branch_target = true;
+          cbi.branch_target_instruction_index = j;
+          break;
+        }
+      }
+      if (cbi.branch_target_instruction_index == u32(-1))
+      {
+        Log_WarningPrintf("Failed to resolve intra-block branch from PC 0x%08X to 0x%08X", cbi.pc, branch_target);
+        TruncateBlockAfterDelaySlot(block, i + 1);
+      }
+    }
+  }
+
+#if 0
+  // swap the branch delay slot and branches around for intra-block branches - this way they always get executed
+  for (u32 i = 0; i < static_cast<u32>(block->instructions.size());)
+  {
+    CodeBlockInstruction& cbi = block->instructions[i];
+    if (!cbi.is_followable_branch)
+    {
+      i++;
+      continue;
+    }
+
+    DebugAssert((i + 1) < block->instructions.size());
+    CodeBlockInstruction& delay_slot = block->instructions[i + 1];
+    DebugAssert(delay_slot.is_branch_delay_slot);
+
+    SwapInstructions(block, i, i + 1);
+    i += 2;
+  }
+#endif
+
+  block->instructions.back().is_last_instruction = true;
+
+#ifdef _DEBUG
+  SmallString disasm;
+  Log_DebugPrintf("Block at 0x%08X", block->GetPC());
+  for (const CodeBlockInstruction& cbi : block->instructions)
+  {
+    CPU::DisassembleInstruction(&disasm, cbi.pc, cbi.instruction.bits, nullptr);
+    Log_DebugPrintf("[%s %s %c%c %s 0x%08X] %08X %s", cbi.is_branch_delay_slot ? "BD" : "  ",
+                    cbi.is_load_delay_slot ? "LD" : "  ", cbi.is_branch_instruction ? 'B' : ' ',
+                    cbi.is_followable_branch ? '+' : ' ', cbi.is_branch_target ? "BT" : "  ", cbi.pc,
+                    cbi.instruction.bits, disasm.GetCharArray());
+  }
+#endif
 
 #ifdef WITH_RECOMPILER
   if (m_use_recompiler)
@@ -332,7 +440,7 @@ bool CodeCache::CompileBlock(CodeBlock* block)
 #endif
 
   return true;
-}
+} // namespace CPU
 
 void CodeCache::InvalidateBlocksWithPageIndex(u32 page_index)
 {
@@ -427,8 +535,13 @@ void CodeCache::InterpretCachedBlock(const CodeBlock& block)
 
   m_core->m_regs.npc = block.GetPC() + 4;
 
-  for (const CodeBlockInstruction& cbi : block.instructions)
+  u32 next_instruction_index = 1;
+  for (u32 current_instruction_index = 0; current_instruction_index < static_cast<u32>(block.instructions.size());)
   {
+    const CodeBlockInstruction& cbi = block.instructions[current_instruction_index];
+    current_instruction_index = next_instruction_index;
+    next_instruction_index++;
+
     m_core->m_pending_ticks++;
 
     // now executing the instruction we previously fetched
@@ -451,6 +564,16 @@ void CodeCache::InterpretCachedBlock(const CodeBlock& block)
 
     if (m_core->m_exception_raised)
       break;
+
+    if (cbi.is_branch_instruction && m_core->m_branch_was_taken)
+    {
+      next_instruction_index =
+        (m_core->m_pending_ticks >= m_core->m_downcount) ? static_cast<u32>(-1) : cbi.branch_target_instruction_index;
+    }
+    else if (cbi.is_exit_block_instruction)
+    {
+      break;
+    }
   }
 
   // cleanup so the interpreter can kick in if needed

@@ -45,6 +45,8 @@ struct CodeBlockInstruction
 {
   Instruction instruction;
   u32 pc;
+  u32 static_branch_target_pc;
+  u32 branch_target_instruction_index;
 
   bool is_branch_instruction : 1;
   bool is_branch_delay_slot : 1;
@@ -54,6 +56,11 @@ struct CodeBlockInstruction
   bool is_last_instruction : 1;
   bool has_load_delay : 1;
   bool can_trap : 1;
+  bool is_followable_branch : 1;
+  bool is_branch_target : 1;
+  bool is_exit_block_instruction : 1;
+
+  CodeBlockInstruction& operator=(const CodeBlockInstruction& rhs);
 };
 
 struct CodeBlock
