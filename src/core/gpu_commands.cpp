@@ -348,6 +348,8 @@ bool GPU::HandleRenderPolygonCommand()
     SetDrawMode((texpage_attribute & DrawMode::Reg::POLYGON_TEXPAGE_MASK) |
                 (m_draw_mode.mode_reg.bits & ~DrawMode::Reg::POLYGON_TEXPAGE_MASK));
     SetTexturePalette(Truncate16(FifoPeek(2) >> 16));
+    if (m_draw_mode.IsUsingPalette())
+      DumpCurrentTexture();
   }
 
   m_stats.num_vertices += num_vertices;
@@ -372,7 +374,11 @@ bool GPU::HandleRenderRectangleCommand()
     SynchronizeCRTC();
 
   if (rc.texture_enable)
+  {
     SetTexturePalette(Truncate16(FifoPeek(2) >> 16));
+    if (m_draw_mode.IsUsingPalette())
+      DumpCurrentTexture();
+  }
 
   const TickCount setup_ticks = 16;
   AddCommandTicks(setup_ticks);

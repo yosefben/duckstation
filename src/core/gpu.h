@@ -10,6 +10,7 @@
 #include <memory>
 #include <tuple>
 #include <vector>
+#include <unordered_set>
 
 class StateWrapper;
 
@@ -108,6 +109,31 @@ public:
     PAL_HSYNC_TICKS = 200, // actually one more on odd lines
     PAL_TOTAL_LINES = 314,
   };
+
+  using VRAMHashType = u64;
+
+  struct TextureHash
+  {
+    u32 width, height;
+    VRAMHashType texture_hash;
+    VRAMHashType palette_hash;
+
+    ALWAYS_INLINE bool operator==(const TextureHash& h) const
+    {
+      return (texture_hash == h.texture_hash && palette_hash == h.palette_hash);
+    }
+    ALWAYS_INLINE bool operator!=(const TextureHash& h) const
+    {
+      return (texture_hash != h.texture_hash || palette_hash != h.palette_hash);
+    }
+  };
+
+  struct TextureHashHasher
+  {
+    std::size_t operator()(const TextureHash& th) const;
+  };
+
+  static std::unordered_set<TextureHash, TextureHashHasher> dumped_textures;
 
   // 4x4 dither matrix.
   static constexpr s32 DITHER_MATRIX[DITHER_MATRIX_SIZE][DITHER_MATRIX_SIZE] = {{-4, +0, -3, +1},  // row 0
@@ -231,6 +257,22 @@ protected:
     g = (g << 3) | (g & 0b111);
     r = (r << 3) | (r & 0b111);
     a = a ? 255 : 0;
+
+    return ZeroExtend32(r) | (ZeroExtend32(g) << 8) | (ZeroExtend32(b) << 16) | (ZeroExtend32(a) << 24);
+  }
+
+  static constexpr u32 RGBA5551ToRGBA8888ForExport(u16 color)
+  {
+    u8 r = Truncate8(color & 31);
+    u8 g = Truncate8((color >> 5) & 31);
+    u8 b = Truncate8((color >> 10) & 31);
+    u8 a = Truncate8((color >> 15) & 1);
+
+    // 00012345 -> 1234545
+    b = (b << 3) | (b & 0b111);
+    g = (g << 3) | (g & 0b111);
+    r = (r << 3) | (r & 0b111);
+    a = a ? 127 : 255;
 
     return ZeroExtend32(r) | (ZeroExtend32(g) << 8) | (ZeroExtend32(b) << 16) | (ZeroExtend32(a) << 24);
   }
@@ -404,6 +446,17 @@ protected:
 
   /// Sets/decodes texture window bits.
   void SetTextureWindow(u32 value);
+
+  /// Returns the hash for a VRAM region.
+  VRAMHashType GetVRAMHash(u32 x, u32 y, u32 width, u32 height) const;
+
+  /// Returns the hash for the currently-bound texture.
+  TextureHash GetCurrentTextureHash() const;
+
+  /// Dumps any currently-bound texture if the files do not exist.
+  void DumpCurrentTexture() const;
+
+  void DumpDirectVRAMWrite(const void* pixels, u32 x, u32 y, u32 width, u32 height);
 
   u32 ReadGPUREAD();
   void FinishVRAMWrite();

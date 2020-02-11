@@ -1,8 +1,10 @@
 #include "gpu.h"
 #include "common/file_system.h"
+#include "common/hash_combine.h"
 #include "common/heap_array.h"
 #include "common/log.h"
 #include "common/state_wrapper.h"
+#include "common/string.h"
 #include "dma.h"
 #include "host_display.h"
 #include "host_interface.h"
@@ -10,10 +12,12 @@
 #include "stb_image_write.h"
 #include "system.h"
 #include "timers.h"
+#include <cinttypes>
 #include <cmath>
 #ifdef WITH_IMGUI
 #include "imgui.h"
 #endif
+#include <xxhash.h>
 Log_SetChannel(GPU);
 
 std::unique_ptr<GPU> g_gpu;
@@ -1184,6 +1188,8 @@ void GPU::UpdateVRAM(u32 x, u32 y, u32 width, u32 height, const void* data)
       }
     }
   }
+
+  DumpDirectVRAMWrite(data, x, y, width, height);
 }
 
 void GPU::CopyVRAM(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32 height)
@@ -1317,6 +1323,212 @@ void GPU::SetTextureWindow(u32 value)
   m_draw_mode.texture_window_offset_y = (value >> 15) & UINT32_C(0x1F);
   m_draw_mode.texture_window_value = value;
   m_draw_mode.texture_window_changed = true;
+}
+
+GPU::VRAMHashType GPU::GetVRAMHash(u32 x, u32 y, u32 width, u32 height) const
+{
+  static_assert(sizeof(VRAMHashType) == sizeof(XXH64_hash_t));
+
+  const u32 max_y = y + height;
+  DebugAssert(max_y <= VRAM_HEIGHT);
+
+  XXH64_state_t hash_state;
+  XXH64_reset(&hash_state, UINT64_C(0x4AF073341EF24663));
+
+  for (u32 current_y = y; current_y < max_y; current_y++)
+    XXH64_update(&hash_state, &m_vram_ptr[current_y * VRAM_WIDTH + x], sizeof(u16) * width);
+
+  return XXH64_digest(&hash_state);
+}
+
+std::size_t GPU::TextureHashHasher::operator()(const TextureHash& th) const
+{
+  std::size_t h = 0;
+  hash_combine(h, th.texture_hash, th.palette_hash);
+  return h;
+}
+
+GPU::TextureHash GPU::GetCurrentTextureHash() const
+{
+  switch (m_draw_mode.GetTextureMode())
+  {
+    case TextureMode::Palette4Bit:
+    {
+      return TextureHash{TEXTURE_PAGE_WIDTH, TEXTURE_PAGE_HEIGHT,
+                         GetVRAMHash(m_draw_mode.texture_page_x, m_draw_mode.texture_page_y, TEXTURE_PAGE_WIDTH / 4,
+                                     TEXTURE_PAGE_HEIGHT),
+                         GetVRAMHash(m_draw_mode.texture_palette_x, m_draw_mode.texture_palette_y, 16, 1)};
+    }
+
+    case TextureMode::Palette8Bit:
+    {
+      return TextureHash{TEXTURE_PAGE_WIDTH, TEXTURE_PAGE_HEIGHT,
+                         GetVRAMHash(m_draw_mode.texture_page_x, m_draw_mode.texture_page_y, TEXTURE_PAGE_WIDTH / 2,
+                                     TEXTURE_PAGE_HEIGHT),
+                         GetVRAMHash(m_draw_mode.texture_palette_x, m_draw_mode.texture_palette_y, 256, 1)};
+    }
+
+    case TextureMode::Direct16Bit:
+    case TextureMode::Reserved_Direct16Bit:
+    {
+      return TextureHash{
+        TEXTURE_PAGE_WIDTH, TEXTURE_PAGE_HEIGHT,
+        GetVRAMHash(m_draw_mode.texture_page_x, m_draw_mode.texture_page_y, TEXTURE_PAGE_WIDTH, TEXTURE_PAGE_HEIGHT),
+        static_cast<VRAMHashType>(0)};
+    }
+
+    default:
+    {
+      return TextureHash{};
+    }
+  }
+}
+
+std::unordered_set<GPU::TextureHash, GPU::TextureHashHasher> GPU::dumped_textures;
+
+void GPU::DumpCurrentTexture() const
+{
+  const TextureHash hash = GetCurrentTextureHash();
+  if (dumped_textures.find(hash) != dumped_textures.end())
+    return;
+
+  dumped_textures.insert(hash);
+
+  const TextureMode mode = m_draw_mode.GetTextureMode();
+  const u32 clut_size = (mode == TextureMode::Palette4Bit ? 16 : (mode == TextureMode::Palette8Bit ? 256 : 0));
+  std::vector<u32> clut;
+  clut.reserve(clut_size);
+  const u16* clut_ptr = &m_vram_ptr[m_draw_mode.texture_palette_y * VRAM_WIDTH + m_draw_mode.texture_palette_x];
+  for (u32 i = 0; i < clut_size; i++)
+    clut.push_back(RGBA5551ToRGBA8888ForExport(*clut_ptr++));
+
+  std::vector<u32> texture_data;
+  texture_data.reserve(TEXTURE_PAGE_WIDTH * TEXTURE_PAGE_HEIGHT);
+  switch (mode)
+  {
+    case TextureMode::Palette4Bit:
+    {
+      for (u32 row = 0; row < TEXTURE_PAGE_HEIGHT; row++)
+      {
+        const u16* row_ptr = &m_vram_ptr[(m_draw_mode.texture_page_y + row) * VRAM_WIDTH + m_draw_mode.texture_page_x];
+        for (u32 col = 0; col < TEXTURE_PAGE_WIDTH / 4; col++)
+        {
+          u16 packed_pixels = *(row_ptr++);
+          texture_data.push_back(clut[packed_pixels & 0x0F]);
+          packed_pixels >>= 4;
+          texture_data.push_back(clut[packed_pixels & 0x0F]);
+          packed_pixels >>= 4;
+          texture_data.push_back(clut[packed_pixels & 0x0F]);
+          packed_pixels >>= 4;
+          texture_data.push_back(clut[packed_pixels & 0x0F]);
+        }
+      }
+    }
+    break;
+
+    case TextureMode::Palette8Bit:
+    {
+      for (u32 row = 0; row < TEXTURE_PAGE_HEIGHT; row++)
+      {
+        const u16* row_ptr = &m_vram_ptr[(m_draw_mode.texture_page_y + row) * VRAM_WIDTH + m_draw_mode.texture_page_x];
+        for (u32 col = 0; col < TEXTURE_PAGE_WIDTH / 2; col++)
+        {
+          u16 packed_pixels = *(row_ptr++);
+          texture_data.push_back(clut[packed_pixels & 0xFF]);
+          packed_pixels >>= 8;
+          texture_data.push_back(clut[packed_pixels & 0xFF]);
+        }
+      }
+    }
+    break;
+
+    case TextureMode::Direct16Bit:
+    case TextureMode::Reserved_Direct16Bit:
+    {
+      for (u32 row = 0; row < TEXTURE_PAGE_HEIGHT; row++)
+      {
+        const u16* row_ptr = &m_vram_ptr[(m_draw_mode.texture_page_y + row) * VRAM_WIDTH + m_draw_mode.texture_page_x];
+        for (u32 col = 0; col < TEXTURE_PAGE_WIDTH; col++)
+          texture_data.push_back(RGBA5551ToRGBA8888ForExport(*(row_ptr++)));
+      }
+    }
+    break;
+
+    default:
+      texture_data.resize(TEXTURE_PAGE_WIDTH * TEXTURE_PAGE_HEIGHT);
+      break;
+  }
+
+  std::string path;
+  if (!System::GetRunningCode().empty())
+    path = g_host_interface->GetUserDirectoryRelativePath("dump/textures/%s", System::GetRunningCode().c_str());
+  else
+    path = g_host_interface->GetUserDirectoryRelativePath("dump/textures");
+
+  if (!FileSystem::DirectoryExists(path.c_str()) && !FileSystem::CreateDirectory(path.c_str(), true))
+  {
+    Log_WarningPrintf("Failed to create texture dump directory '%s'", path.c_str());
+    return;
+  }
+
+  if (hash.palette_hash != 0)
+    path += TinyString::FromFormat("/%" PRIx64 "_%" PRIx64 ".png", hash.texture_hash, hash.palette_hash);
+  else
+    path += TinyString::FromFormat("/%" PRIx64 ".png", hash.texture_hash);
+
+  if (!stbi_write_png(path.c_str(), TEXTURE_PAGE_WIDTH, TEXTURE_PAGE_HEIGHT, 4, texture_data.data(),
+                      TEXTURE_PAGE_WIDTH * sizeof(u32)))
+  {
+    Log_WarningPrintf("Failed to dump texture to '%s'", path.c_str());
+    return;
+  }
+}
+
+void GPU::DumpDirectVRAMWrite(const void* pixels, u32 x, u32 y, u32 width, u32 height)
+{
+  const u32 WIDTH_THRESHOLD = 128;
+  const u32 HEIGHT_THRESHOLD = 128;
+  if (width < WIDTH_THRESHOLD || height < HEIGHT_THRESHOLD)
+    return;
+
+  TextureHash hash{width, height, GetVRAMHash(x, y, width, height), 0};
+  if (dumped_textures.find(hash) != dumped_textures.end())
+    return;
+
+  dumped_textures.insert(hash);
+
+  std::vector<u32> texture_data;
+  texture_data.reserve(width * height);
+
+  for (u32 row = 0; row < height; row++)
+  {
+    const u16* row_ptr = &m_vram_ptr[(y + row) * VRAM_WIDTH + x];
+    for (u32 col = 0; col < width; col++)
+      texture_data.push_back(RGBA5551ToRGBA8888ForExport(*(row_ptr++)));
+  }
+
+  std::string path;
+  if (!System::GetRunningCode().empty())
+    path = g_host_interface->GetUserDirectoryRelativePath("dump/textures/vram_%s", System::GetRunningCode().c_str());
+  else
+    path = g_host_interface->GetUserDirectoryRelativePath("dump/textures");
+
+  if (!FileSystem::DirectoryExists(path.c_str()) && !FileSystem::CreateDirectory(path.c_str(), true))
+  {
+    Log_WarningPrintf("Failed to create texture dump directory '%s'", path.c_str());
+    return;
+  }
+
+  if (hash.palette_hash != 0)
+    path += TinyString::FromFormat("/%" PRIx64 "_%" PRIx64 ".png", hash.texture_hash, hash.palette_hash);
+  else
+    path += TinyString::FromFormat("/%" PRIx64 ".png", hash.texture_hash);
+
+  if (!stbi_write_png(path.c_str(), width, height, 4, texture_data.data(), width * sizeof(u32)))
+  {
+    Log_WarningPrintf("Failed to dump texture to '%s'", path.c_str());
+    return;
+  }
 }
 
 bool GPU::DumpVRAMToFile(const char* filename, u32 width, u32 height, u32 stride, const void* buffer, bool remove_alpha)
