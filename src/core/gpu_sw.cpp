@@ -600,9 +600,9 @@ void GPU_SW::ShadePixel(u32 x, u32 y, u8 color_r, u8 color_g, u8 color_b, u8 tex
     UNREFERENCED_VARIABLE(transparent);
   }
 
-   const u16 mask_and = m_GPUSTAT.GetMaskAND();
-   if ((bg_color.bits & mask_and) != mask_and)
-     return;
+  const u16 mask_and = m_GPUSTAT.GetMaskAND();
+  if ((bg_color.bits & mask_and) != mask_and)
+    return;
 
   SetPixel(static_cast<u32>(x), static_cast<u32>(y), color.bits | m_GPUSTAT.GetMaskOR());
 }

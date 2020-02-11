@@ -96,6 +96,28 @@ public:
     HBLANK_TIMER_INDEX = 1
   };
 
+  using VRAMHashType = u64;
+
+  struct TextureHash
+  {
+    VRAMHashType texture_hash;
+    VRAMHashType palette_hash;
+
+    ALWAYS_INLINE bool operator==(const TextureHash& h) const
+    {
+      return (texture_hash == h.texture_hash && palette_hash == h.palette_hash);
+    }
+    ALWAYS_INLINE bool operator!=(const TextureHash& h) const
+    {
+      return (texture_hash != h.texture_hash || palette_hash != h.palette_hash);
+    }
+  };
+
+  struct TextureHashHasher
+  {
+    std::size_t operator()(const TextureHash& th) const;
+  };
+
   // 4x4 dither matrix.
   static constexpr s32 DITHER_MATRIX[4][4] = {{-4, +0, -3, +1},  // row 0
                                               {+2, -2, +3, -1},  // row 1
@@ -163,6 +185,22 @@ protected:
     g = (g << 3) | (g & 0b111);
     r = (r << 3) | (r & 0b111);
     a = a ? 255 : 0;
+
+    return ZeroExtend32(r) | (ZeroExtend32(g) << 8) | (ZeroExtend32(b) << 16) | (ZeroExtend32(a) << 24);
+  }
+
+  static constexpr u32 RGBA5551ToRGBA8888ForExport(u16 color)
+  {
+    u8 r = Truncate8(color & 31);
+    u8 g = Truncate8((color >> 5) & 31);
+    u8 b = Truncate8((color >> 10) & 31);
+    u8 a = Truncate8((color >> 15) & 1);
+
+    // 00012345 -> 1234545
+    b = (b << 3) | (b & 0b111);
+    g = (g << 3) | (g & 0b111);
+    r = (r << 3) | (r & 0b111);
+    a = a ? 127 : 255;
 
     return ZeroExtend32(r) | (ZeroExtend32(g) << 8) | (ZeroExtend32(b) << 16) | (ZeroExtend32(a) << 24);
   }
@@ -314,6 +352,15 @@ protected:
 
   /// Sets/decodes polygon/rectangle texture palette value.
   void SetTexturePalette(u16 bits);
+
+  /// Returns the hash for a VRAM region.
+  VRAMHashType GetVRAMHash(u32 x, u32 y, u32 width, u32 height) const;
+
+  /// Returns the hash for the currently-bound texture.
+  TextureHash GetCurrentTextureHash() const;
+
+  /// Dumps any currently-bound texture if the files do not exist.
+  void DumpCurrentTexture() const;
 
   u32 ReadGPUREAD();
   void WriteGP0(u32 value);
