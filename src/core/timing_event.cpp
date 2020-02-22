@@ -18,7 +18,7 @@ TimingEvent::~TimingEvent()
 
 TickCount TimingEvent::GetTicksSinceLastExecution() const
 {
-  return m_system->m_cpu->GetPendingTicks() + m_time_since_last_run;
+  return m_time_since_last_run + m_system->m_cpu->GetPendingTicks();
 }
 
 TickCount TimingEvent::GetTicksUntilNextExecution() const

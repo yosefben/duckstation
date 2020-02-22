@@ -340,7 +340,7 @@ protected:
   void UpdateSliceTicks();
 
   // Updates dynamic bits in GPUSTAT (ready to send VRAM/ready to receive DMA)
-  void UpdateGPUSTAT();
+  void UpdateDMARequest();
 
   // Ticks for hblank/vblank.
   void Execute(TickCount ticks);
@@ -583,7 +583,12 @@ protected:
   } m_crtc_state = {};
 
   State m_state = State::Idle;
+  TickCount m_blitter_ticks = 0;
   u32 m_command_total_words = 0;
+
+  /// GPUREAD value for non-VRAM-reads.
+  u32 m_GPUREAD_latch = 0;
+
   struct VRAMTransfer
   {
     u16 x;
@@ -593,9 +598,6 @@ protected:
     u16 col;
     u16 row;
   } m_vram_transfer = {};
-
-  /// GPUREAD value for non-VRAM-reads.
-  u32 m_GPUREAD_latch = 0;
 
   std::vector<u32> m_GP0_buffer;
 
