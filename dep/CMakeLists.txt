@@ -12,7 +12,7 @@ add_subdirectory(libFLAC)
 add_subdirectory(libchdr)
 add_subdirectory(xxhash)
 
-if(NOT ANDROID)
+if(BUILD_SDL_FRONTEND)
   add_subdirectory(nativefiledialog)
 endif()
 
