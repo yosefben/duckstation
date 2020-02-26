@@ -7,6 +7,7 @@ set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/CMakeModules/")
 if(NOT ANDROID)
   option(BUILD_SDL_FRONTEND "Build the SDL frontend" ON)
   option(BUILD_QT_FRONTEND "Build the Qt frontend" ON)
+  option(BUILD_OGA_FRONTEND "Build the ODROID-GO Advance frontend" OFF)
 endif()
 
 
