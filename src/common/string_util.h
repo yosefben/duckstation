@@ -1,5 +1,9 @@
 #pragma once
+#if __has_cpp_attribute(__cpp_lib_to_chars)
 #include <charconv>
+#else
+#include <sstream>
+#endif
 #include <cstdarg>
 #include <cstddef>
 #include <cstring>
@@ -33,9 +37,19 @@ template<typename T>
 std::optional<T> FromChars(const std::string_view str)
 {
   T value;
+
+#if __has_cpp_attribute(__cpp_lib_to_chars)
+  T value;
   const std::from_chars_result result = std::from_chars(str.data(), str.data() + str.length(), value);
   if (result.ec != std::errc())
     return std::nullopt;
+#else
+  std::string temp(str);
+  std::istringstream ss(temp);
+  ss >> value;
+  if (ss.fail())
+    return std::nullopt;
+#endif
 
   return value;
 }
