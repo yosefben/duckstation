@@ -43,12 +43,12 @@ add_executable(duckstation-qt
   settingsdialog.ui
 )
 
-target_link_libraries(duckstation-qt PRIVATE frontend-common core common imgui glad minizip Qt5::Core Qt5::Gui Qt5::Widgets Qt5::Network)
+target_link_libraries(duckstation-qt PRIVATE frontend-common core common imgui glad minizip Qt5::Core Qt5::Gui Qt5::Widgets)
 
 if(WIN32)
   target_sources(duckstation-qt PRIVATE
     d3d11displaywindow.cpp
     d3d11displaywindow.h
   )
-  target_link_libraries(duckstation PRIVATE d3d11.lib dxgi.lib)
+  target_link_libraries(duckstation-qt PRIVATE d3d11.lib dxgi.lib)
 endif()
