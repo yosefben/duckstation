@@ -747,7 +747,7 @@ void RaiseException(Exception excode, u32 EPC, bool BD, bool BT, u8 CE);
 
 static void WriteCacheControl(u32 value)
 {
-  Log_WarningPrintf("Cache control <- 0x%08X", value);
+  Log_DevPrintf("Cache control <- 0x%08X", value);
   g_state.cache_control = value;
 }
 
