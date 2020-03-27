@@ -1957,7 +1957,7 @@ void CommonHostInterface::StopDumpingAudio()
 }
 
 bool CommonHostInterface::SaveScreenshot(const char* filename /* = nullptr */, bool full_resolution /* = true */,
-                                         bool apply_aspect_ratio /* = true */)
+                                         bool apply_aspect_ratio /* = true */, bool compress_on_thread /* = true */)
 {
   if (System::IsShutdown())
     return false;
@@ -1982,7 +1982,8 @@ bool CommonHostInterface::SaveScreenshot(const char* filename /* = nullptr */, b
   }
 
   g_gpu->ResetGraphicsAPIState();
-  const bool screenshot_saved = m_display->WriteDisplayTextureToFile(filename, full_resolution, apply_aspect_ratio);
+  const bool screenshot_saved =
+    m_display->WriteDisplayTextureToFile(filename, full_resolution, apply_aspect_ratio, compress_on_thread);
   g_gpu->RestoreGraphicsAPIState();
   if (!screenshot_saved)
   {
