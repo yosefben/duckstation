@@ -237,7 +237,14 @@ bool CanInstructionTrap(const Instruction& instruction, bool in_user_mode)
   }
 }
 
-bool IsInvalidInstruction(const Instruction& instruction)
+bool IsReturnInstruction(const Instruction& instruction)
+{
+  // jr $ra
+  return (instruction.op == InstructionOp::funct && instruction.r.funct == InstructionFunct::jr &&
+          instruction.r.rs == Reg::ra);
+}
+
+bool IsValidInstruction(const Instruction& instruction)
 {
   // TODO
   return true;

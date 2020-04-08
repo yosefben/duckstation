@@ -118,7 +118,9 @@ void CodeCache::Execute()
       if (next_block)
       {
         // Link the previous block to this new block if we find a new block.
-        LinkBlock(block, next_block);
+        if (block->allow_linking)
+          LinkBlock(block, next_block);
+
         block = next_block;
         goto reexecute_block;
       }
@@ -247,6 +249,7 @@ bool CodeCache::CompileBlock(CodeBlock* block)
   u32 pc = block->GetPC();
   bool is_branch_delay_slot = false;
   bool is_load_delay_slot = false;
+  bool last_branch_is_return = false;
 
 #if 0
   if (pc == 0x0005aa90)
@@ -260,7 +263,7 @@ bool CodeCache::CompileBlock(CodeBlock* block)
     const PhysicalMemoryAddress phys_addr = pc & PHYSICAL_MEMORY_ADDRESS_MASK;
     if (!m_bus->IsCacheableAddress(phys_addr) ||
         m_bus->DispatchAccess<MemoryAccessType::Read, MemoryAccessSize::Word>(phys_addr, cbi.instruction.bits) < 0 ||
-        !IsInvalidInstruction(cbi.instruction))
+        !IsValidInstruction(cbi.instruction))
     {
       break;
     }
@@ -271,8 +274,12 @@ bool CodeCache::CompileBlock(CodeBlock* block)
     cbi.is_branch_instruction = IsBranchInstruction(cbi.instruction);
     cbi.is_load_instruction = IsMemoryLoadInstruction(cbi.instruction);
     cbi.is_store_instruction = IsMemoryStoreInstruction(cbi.instruction);
+    cbi.is_return_instruction = IsReturnInstruction(cbi.instruction);
     cbi.has_load_delay = InstructionHasLoadDelay(cbi.instruction);
     cbi.can_trap = CanInstructionTrap(cbi.instruction, m_core->InUserMode());
+
+    if (cbi.is_branch_instruction)
+      last_branch_is_return = cbi.is_return_instruction;
 
     // instruction is decoded now
     block->instructions.push_back(cbi);
@@ -297,6 +304,9 @@ bool CodeCache::CompileBlock(CodeBlock* block)
   if (!block->instructions.empty())
   {
     block->instructions.back().is_last_instruction = true;
+
+    // disallow linking from returns because there's multiple targets
+    block->allow_linking = !last_branch_is_return;
 
 #ifdef _DEBUG
     SmallString disasm;
