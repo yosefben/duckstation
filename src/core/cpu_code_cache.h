@@ -52,7 +52,6 @@ struct CodeBlockInstruction
   bool is_store_instruction : 1;
   bool is_load_delay_slot : 1;
   bool is_last_instruction : 1;
-  bool is_return_instruction : 1;
   bool has_load_delay : 1;
   bool can_trap : 1;
 };
@@ -72,7 +71,6 @@ struct CodeBlock
   std::vector<CodeBlock*> link_successors;
 
   bool invalidated = false;
-  bool allow_linking = false;
 
   const u32 GetPC() const { return key.GetPC(); }
   const u32 GetSizeInBytes() const { return static_cast<u32>(instructions.size()) * sizeof(Instruction); }

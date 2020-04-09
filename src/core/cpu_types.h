@@ -214,14 +214,13 @@ union Instruction
 };
 
 // Instruction helpers.
-bool IsReturnInstruction(const Instruction& instruction);
+bool IsBranchInstruction(const Instruction& instruction);
 bool IsMemoryLoadInstruction(const Instruction& instruction);
 bool IsMemoryStoreInstruction(const Instruction& instruction);
 bool InstructionHasLoadDelay(const Instruction& instruction);
 bool IsExitBlockInstruction(const Instruction& instruction);
 bool CanInstructionTrap(const Instruction& instruction, bool in_user_mode);
-bool IsBranchInstruction(const Instruction& instruction);
-bool IsValidInstruction(const Instruction& instruction);
+bool IsInvalidInstruction(const Instruction& instruction);
 
 struct Registers
 {
