@@ -65,6 +65,7 @@ public:
   // Accessing components.
   HostInterface* GetHostInterface() const { return m_host_interface; }
   CPU::Core* GetCPU() const { return m_cpu.get(); }
+  CPU::CodeCache* GetCPUCodeCache() const { return m_cpu_code_cache.get(); }
   Bus* GetBus() const { return m_bus.get(); }
   DMA* GetDMA() const { return m_dma.get(); }
   InterruptController* GetInterruptController() const { return m_interrupt_controller.get(); }

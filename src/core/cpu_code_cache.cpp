@@ -36,6 +36,12 @@ void CodeCache::Initialize(System* system, Core* core, Bus* bus)
 
 void CodeCache::Execute()
 {
+  if (m_use_recompiler)
+  {
+    ExecuteRecompiler();
+    return;
+  }
+
   CodeBlockKey next_block_key = GetNextBlockKey();
 
   while (m_core->m_pending_ticks < m_core->m_downcount)
@@ -122,6 +128,23 @@ void CodeCache::Execute()
   m_core->m_regs.npc = m_core->m_regs.pc;
 }
 
+void CodeCache::ExecuteRecompiler()
+{
+  while (m_core->m_pending_ticks < m_core->m_downcount)
+  {
+    if (m_core->HasPendingInterrupt())
+    {
+      m_core->SafeReadMemoryWord(m_core->m_regs.pc, &m_core->m_next_instruction.bits);
+      m_core->DispatchInterrupt();
+    }
+
+    m_block_function_lookup.Dispatch(m_core);
+  }
+
+  // in case we switch to interpreter...
+  m_core->m_regs.npc = m_core->m_regs.pc;
+}
+
 void CodeCache::SetUseRecompiler(bool enable, bool fastmem)
 {
 #ifdef WITH_RECOMPILER
@@ -161,6 +184,7 @@ void CodeCache::Flush()
 #ifdef WITH_RECOMPILER
   if (m_code_buffer)
     m_code_buffer->Reset();
+  m_block_function_lookup.Reset(FastCompileBlockFunction);
 #endif
 }
 
@@ -199,23 +223,7 @@ CodeBlock* CodeCache::LookupBlock(CodeBlockKey key)
       return existing_block;
   }
 
-  CodeBlock* block = new CodeBlock(key);
-  if (CompileBlock(block))
-  {
-    // add it to the page map if it's in ram
-    AddBlockToPageMap(block);
-  }
-  else
-  {
-    Log_ErrorPrintf("Failed to compile block at PC=0x%08X", key.GetPC());
-    delete block;
-    block = nullptr;
-  }
-
-  m_blocks.emplace(key.bits, block);
-  AddBlockToHostCodeMap(block);
-
-  return block;
+  return CompileBlock(key);
 }
 
 bool CodeCache::RevalidateBlock(CodeBlock* block)
@@ -236,6 +244,9 @@ bool CodeCache::RevalidateBlock(CodeBlock* block)
   // re-add it to the page map since it's still up-to-date
   block->invalidated = false;
   AddBlockToPageMap(block);
+#ifdef WITH_RECOMPILER
+  m_block_function_lookup.SetBlockPointer(block->GetPC(), block->host_code);
+#endif
   return true;
 
 recompile:
@@ -255,6 +266,39 @@ recompile:
     AddBlockToPageMap(block);
 
   return true;
+}
+
+void CodeCache::FastCompileBlockFunction(CPU::Core* cpu)
+{
+  CodeCache* cc = cpu->m_system->GetCPUCodeCache();
+  CodeBlock* block = cc->LookupBlock(cc->GetNextBlockKey());
+  if (block)
+    block->host_code(cpu);
+  else
+    cc->InterpretUncachedBlock();
+}
+
+CodeBlock* CodeCache::CompileBlock(CodeBlockKey key)
+{
+  CodeBlock* block = new CodeBlock(key);
+  if (CompileBlock(block))
+  {
+    // add it to the page map if it's in ram
+    AddBlockToPageMap(block);
+  }
+  else
+  {
+    Log_ErrorPrintf("Failed to compile block at PC=0x%08X", key.GetPC());
+    delete block;
+    block = nullptr;
+  }
+
+  m_blocks.emplace(key.bits, block);
+  AddBlockToHostCodeMap(block);
+#ifdef WITH_RECOMPILER
+  m_block_function_lookup.SetBlockPointer(block->GetPC(), block->host_code);
+#endif
+  return block;
 }
 
 bool CodeCache::CompileBlock(CodeBlock* block)
@@ -367,6 +411,9 @@ void CodeCache::InvalidateBlocksWithPageIndex(u32 page_index)
     // Invalidate forces the block to be checked again.
     Log_DebugPrintf("Invalidating block at 0x%08X", block->GetPC());
     block->invalidated = true;
+#ifdef WITH_RECOMPILER
+    m_block_function_lookup.SetBlockPointer(block->GetPC(), FastCompileBlockFunction);
+#endif
   }
 
   // Block will be re-added next execution.
@@ -385,6 +432,10 @@ void CodeCache::FlushBlock(CodeBlock* block)
     RemoveBlockFromPageMap(block);
 
   RemoveBlockFromHostCodeMap(block);
+
+#ifdef WITH_RECOMPILER
+  m_block_function_lookup.SetBlockPointer(block->GetPC(), FastCompileBlockFunction);
+#endif
 
   m_blocks.erase(iter);
   delete block;

@@ -1,6 +1,8 @@
 #pragma once
+#include "bus.h"
 #include "common/bitfield.h"
 #include "common/page_fault_handler.h"
+#include "cpu_core.h"
 #include "cpu_types.h"
 #include <array>
 #include <map>
@@ -97,6 +99,35 @@ struct CodeBlock
   }
 };
 
+class BlockFunctionLookup
+{
+public:
+  ALWAYS_INLINE void Reset(CodeBlock::HostCodePointer default_function) { m_slots.fill(default_function); }
+
+  ALWAYS_INLINE void SetBlockPointer(u32 pc, CodeBlock::HostCodePointer function)
+  {
+    m_slots[GetArrayIndex(pc)] = function;
+  }
+
+  ALWAYS_INLINE void Dispatch(CPU::Core* cpu) const { m_slots[GetArrayIndex(cpu->GetRegs().pc)](cpu); }
+
+private:
+  enum : u32
+  {
+    RAM_SLOT_COUNT = Bus::RAM_SIZE / 4,
+    BIOS_SLOT_COUNT = Bus::BIOS_SIZE / 4,
+    TOTAL_SLOT_COUNT = RAM_SLOT_COUNT + BIOS_SLOT_COUNT,
+  };
+
+  ALWAYS_INLINE static u32 GetArrayIndex(u32 pc)
+  {
+    return ((pc & PHYSICAL_MEMORY_ADDRESS_MASK) >= Bus::BIOS_BASE) ? (RAM_SLOT_COUNT + ((pc & Bus::BIOS_MASK) >> 2)) :
+                                                                     ((pc & Bus::RAM_MASK) >> 2);
+  }
+
+  std::array<CodeBlock::HostCodePointer, TOTAL_SLOT_COUNT> m_slots = {};
+};
+
 class CodeCache
 {
 public:
@@ -105,6 +136,7 @@ public:
 
   void Initialize(System* system, Core* core, Bus* bus);
   void Execute();
+  void ExecuteRecompiler();
 
   /// Flushes the code cache, forcing all blocks to be recompiled.
   void Flush();
@@ -131,6 +163,7 @@ private:
   /// The block can also be flushed if recompilation failed, so ignore the pointer if false is returned.
   bool RevalidateBlock(CodeBlock* block);
 
+  CodeBlock* CompileBlock(CodeBlockKey key);
   bool CompileBlock(CodeBlock* block);
   void FlushBlock(CodeBlock* block);
   void AddBlockToPageMap(CodeBlock* block);
@@ -151,6 +184,9 @@ private:
   void ShutdownFastmem();
   Common::PageFaultHandler::HandlerResult PageFaultHandler(void* exception_pc, void* fault_address, bool is_write);
 
+  // Callbacks from the fast lookup table
+  static void FastCompileBlockFunction(CPU::Core* cpu);
+
   System* m_system = nullptr;
   Core* m_core = nullptr;
   Bus* m_bus = nullptr;
@@ -165,6 +201,10 @@ private:
 
   bool m_use_recompiler = false;
   bool m_fastmem = false;
+
+#ifdef WITH_RECOMPILER
+  BlockFunctionLookup m_block_function_lookup;
+#endif
 
   std::array<std::vector<CodeBlock*>, CPU_CODE_CACHE_PAGE_COUNT> m_ram_block_map;
 };

@@ -76,7 +76,8 @@ public:
     EXP2_SIZE = 0x2000,
     EXP2_MASK = EXP2_SIZE - 1,
     BIOS_BASE = 0x1FC00000,
-    BIOS_SIZE = 0x80000
+    BIOS_SIZE = 0x80000,
+    BIOS_MASK = BIOS_SIZE - 1
   };
 
   enum : TickCount

@@ -70,8 +70,12 @@ public:
   bool SafeWriteMemoryWord(VirtualMemoryAddress addr, u32 value);
 
   // External IRQs
-  void SetExternalInterrupt(u8 bit);
-  void ClearExternalInterrupt(u8 bit);
+  ALWAYS_INLINE void SetExternalInterrupt(u8 bit)
+  {
+    m_cop0_regs.cause.Ip |= static_cast<u8>(1u << bit);
+    m_interrupt_delay = 1;
+  }
+  ALWAYS_INLINE void ClearExternalInterrupt(u8 bit) { m_cop0_regs.cause.Ip &= static_cast<u8>(~(1u << bit)); }
 
 private:
   template<MemoryAccessType type, MemoryAccessSize size>
@@ -121,7 +125,19 @@ private:
   u32 GetExceptionVector(Exception excode) const;
   void RaiseException(Exception excode);
   void RaiseException(Exception excode, u32 EPC, bool BD, bool BT, u8 CE);
-  bool HasPendingInterrupt();
+
+  ALWAYS_INLINE bool HasPendingInterrupt()
+  {
+    // const bool do_interrupt = m_cop0_regs.sr.IEc && ((m_cop0_regs.cause.Ip & m_cop0_regs.sr.Im) != 0);
+    const bool do_interrupt =
+      m_cop0_regs.sr.IEc && (((m_cop0_regs.cause.bits & m_cop0_regs.sr.bits) & (UINT32_C(0xFF) << 8)) != 0);
+
+    const bool interrupt_delay = m_interrupt_delay;
+    m_interrupt_delay = false;
+
+    return do_interrupt && !interrupt_delay;
+  }
+
   void DispatchInterrupt();
 
   // clears pipeline of load/branch delays
