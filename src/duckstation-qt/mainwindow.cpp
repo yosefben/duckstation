@@ -31,7 +31,13 @@ static constexpr char DISC_IMAGE_FILTER[] =
 
 ALWAYS_INLINE static QString getWindowTitle()
 {
+#if defined(_DEBUGFAST)
+  return QStringLiteral("DuckStation DebugFast %1 (%2)").arg(g_scm_tag_str).arg(g_scm_branch_str);
+#elif defined(_DEBUG)
+  return QStringLiteral("DuckStation Debug %1 (%2)").arg(g_scm_tag_str).arg(g_scm_branch_str);
+#else
   return QStringLiteral("DuckStation %1 (%2)").arg(g_scm_tag_str).arg(g_scm_branch_str);
+#endif
 }
 
 MainWindow::MainWindow(QtHostInterface* host_interface)
