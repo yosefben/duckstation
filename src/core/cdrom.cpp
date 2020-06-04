@@ -289,6 +289,8 @@ void CDROM::Initialize(System* system, DMA* dma, InterruptController* interrupt_
     m_system->CreateTimingEvent("CDROM Command Event", 1, 1, std::bind(&CDROM::ExecuteCommand, this), false);
   m_drive_event = m_system->CreateTimingEvent("CDROM Drive Event", 1, 1,
                                               std::bind(&CDROM::ExecuteDrive, this, std::placeholders::_2), false);
+  m_speed_change_event = m_system->CreateTimingEvent(
+    "CDROM Speed Change Event", 1, 1, std::bind(&CDROM::ExecuteSpeedChange, this, std::placeholders::_2), false);
 
   if (m_system->GetSettings().cdrom_read_thread)
     m_reader.StartThread();
@@ -310,6 +312,7 @@ void CDROM::SoftReset()
   m_command_event->Deactivate();
   m_drive_state = DriveState::Idle;
   m_drive_event->Deactivate();
+  m_speed_change_event->Deactivate();
   m_status.bits = 0;
   m_secondary_status.bits = 0;
   m_secondary_status.motor_on = CanReadMedia();
@@ -834,17 +837,23 @@ TickCount CDROM::GetTicksForSeek(CDImage::LBA new_lba)
     ticks += GetTicksForRead() * 4u;
   }
 
-  if (m_mode.double_speed != m_current_double_speed)
+  if (m_speed_change_event->IsActive())
   {
-    Log_DevPrintf("Switched from %s to %s speed", m_current_double_speed ? "double" : "single",
-                  m_mode.double_speed ? "double" : "single");
-    m_current_double_speed = m_mode.double_speed;
+    const TickCount ticks_for_speed_change = m_speed_change_event->GetTicksUntilNextExecution();
+    m_speed_change_event->Deactivate();
 
-    // Approximate time for the motor to change speed?
-    ticks += static_cast<u32>(static_cast<double>(MASTER_CLOCK) * 0.1);
+    if (ticks_for_speed_change > ticks)
+    {
+      Log_DevPrintf("Seek time for %u LBAs: %d (but using %d from speed change)", lba_diff, ticks,
+                    ticks_for_speed_change);
+      ticks = ticks_for_speed_change;
+    }
+  }
+  else
+  {
+    Log_DevPrintf("Seek time for %u LBAs: %d", lba_diff, ticks);
   }
 
-  Log_DevPrintf("Seek time for %u LBAs: %d", lba_diff, ticks);
   return ticks;
 }
 
@@ -1007,10 +1016,13 @@ void CDROM::ExecuteCommand()
 
     case Command::Setmode:
     {
-      const u8 mode = m_param_fifo.Peek(0);
-      Log_DebugPrintf("CDROM setmode command 0x%02X", ZeroExtend32(mode));
+      const ModeRegister new_mode{m_param_fifo.Peek(0)};
+      Log_DebugPrintf("CDROM setmode command 0x%02X", new_mode.bits);
 
-      m_mode.bits = mode;
+      if (new_mode.double_speed != m_current_double_speed)
+        BeginSpeedChange(new_mode.double_speed);
+
+      m_mode.bits = new_mode.bits;
       SendACKAndStat();
       EndCommand();
       return;
@@ -1166,6 +1178,7 @@ void CDROM::ExecuteCommand()
 
       m_drive_state = DriveState::Stopping;
       m_drive_event->Schedule(stop_time);
+      m_speed_change_event->Deactivate();
 
       EndCommand();
       return;
@@ -1177,7 +1190,9 @@ void CDROM::ExecuteCommand()
       SendACKAndStat();
 
       m_drive_state = DriveState::Resetting;
-      m_drive_event->Schedule(400000);
+      m_drive_event->Schedule(500000);
+      if (m_current_double_speed)
+        BeginSpeedChange(false);
 
       EndCommand();
       return;
@@ -1770,6 +1785,7 @@ void CDROM::DoStopComplete()
   m_drive_event->Deactivate();
   m_secondary_status.ClearActiveBits();
   m_secondary_status.motor_on = false;
+  m_current_double_speed = false;
 
   m_async_response_fifo.Clear();
   m_async_response_fifo.Push(m_secondary_status.bits);
@@ -2281,6 +2297,24 @@ void CDROM::ClearSectorBuffers()
 {
   for (u32 i = 0; i < NUM_SECTOR_BUFFERS; i++)
     m_sector_buffers[i].size = 0;
+}
+
+void CDROM::ExecuteSpeedChange(TickCount ticks_late)
+{
+  m_speed_change_event->Deactivate();
+}
+
+void CDROM::BeginSpeedChange(bool new_double_speed)
+{
+  static constexpr u32 ticks_single_to_double = static_cast<u32>(1.0 * static_cast<double>(MASTER_CLOCK));
+  static constexpr u32 ticks_double_to_single = static_cast<u32>(1.5 * static_cast<double>(MASTER_CLOCK));
+  const u32 ticks = new_double_speed ? ticks_single_to_double : ticks_double_to_single;
+  Log_DevPrintf("Beginning speed change from %s to %s, %u ticks remaining",
+                m_current_double_speed ? "double" : "single", new_double_speed ? "double" : "single", ticks);
+
+  m_current_double_speed = new_double_speed;
+  m_speed_change_event->Deactivate();
+  m_speed_change_event->SetIntervalAndSchedule(ticks);
 }
 
 void CDROM::DrawDebugWindow()

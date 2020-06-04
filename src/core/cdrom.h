@@ -254,6 +254,8 @@ private:
   void ResetXAResampler();
   void LoadDataFIFO();
   void ClearSectorBuffers();
+  void ExecuteSpeedChange(TickCount ticks_late);
+  void BeginSpeedChange(bool new_double_speed);
 
   System* m_system = nullptr;
   DMA* m_dma = nullptr;
@@ -261,6 +263,7 @@ private:
   SPU* m_spu = nullptr;
   std::unique_ptr<TimingEvent> m_command_event;
   std::unique_ptr<TimingEvent> m_drive_event;
+  std::unique_ptr<TimingEvent> m_speed_change_event;
 
   Command m_command = Command::None;
   DriveState m_drive_state = DriveState::Idle;
