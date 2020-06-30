@@ -272,7 +272,20 @@ std::optional<std::vector<u8>> HostInterface::GetBIOSImage(ConsoleRegion region)
   Log_WarningPrintf("No suitable BIOS image for region %s could be located, using configured image '%s'. This may "
                     "result in instability.",
                     Settings::GetConsoleRegionName(region), g_settings.bios_path.c_str());
-  return BIOS::LoadImageFromFile(g_settings.bios_path);
+  AddFormattedOSDMessage(5.0f,
+                         "No suitable BIOS image for region %s could be located, using configured image '%s'. This may "
+                         "result in instability.",
+                         Settings::GetConsoleRegionName(region), g_settings.bios_path.c_str());
+
+  std::optional<BIOS::Image> image = BIOS::LoadImageFromFile(g_settings.bios_path);
+  if (!image.has_value())
+  {
+    ReportError(
+      "No BIOS image could be loaded. Please ensure a BIOS image is located in the correct directory (see README).");
+    return std::nullopt;
+  }
+
+  return image;
 }
 
 bool HostInterface::LoadState(const char* filename)
