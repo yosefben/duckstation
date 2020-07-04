@@ -131,7 +131,9 @@ private:
     Playing,
     Pausing,
     Stopping,
-    ChangingSession
+    ChangingSession,
+    ChangingSpeed,
+    ImplicitTOCRead
   };
 
   union StatusRegister
@@ -236,8 +238,10 @@ private:
 
   TickCount GetAckDelayForCommand(Command command);
   TickCount GetTicksForRead();
-  TickCount GetTicksForSeek(CDImage::LBA new_lba);
+  TickCount GetTicksForSeek(CDImage::LBA new_lba, bool ignore_speed_change = false);
   TickCount GetTicksForStop(bool motor_was_on);
+  TickCount GetTicksForSpeedChange();
+  TickCount GetTicksForTOCRead();
   CDImage::LBA GetNextSectorToBeRead();
   void BeginCommand(Command command); // also update status register
   void EndCommand();                  // also updates status register
@@ -254,6 +258,8 @@ private:
   void DoPauseComplete();
   void DoStopComplete();
   void DoChangeSessionComplete();
+  void DoChangeSpeedComplete();
+  void DoImplicitTOCReadComplete();
   void DoIDRead();
   void DoTOCRead();
   void DoSectorRead();
@@ -282,7 +288,6 @@ private:
   StatusRegister m_status = {};
   SecondaryStatusRegister m_secondary_status = {};
   ModeRegister m_mode = {};
-  bool m_current_double_speed = false;
 
   u8 m_interrupt_enable_register = INTERRUPT_REGISTER_MASK;
   u8 m_interrupt_flag_register = 0;
