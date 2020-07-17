@@ -1083,8 +1083,8 @@ void UpdateMemoryCards()
   {
     g_pad.SetMemoryCard(i, nullptr);
 
-    std::unique_ptr<MemoryCard> card;
     const MemoryCardType type = g_settings.memory_card_types[i];
+    std::string path;
     switch (type)
     {
       case MemoryCardType::None:
@@ -1098,11 +1098,11 @@ void UpdateMemoryCards()
                                                    "Per-game memory card cannot be used for slot %u as the running "
                                                    "game has no code. Using shared card instead.",
                                                    i + 1u);
-          card = MemoryCard::Open(g_host_interface->GetSharedMemoryCardPath(i));
+          path = g_host_interface->GetSharedMemoryCardPath(i);
         }
         else
         {
-          card = MemoryCard::Open(g_host_interface->GetGameMemoryCardPath(s_running_game_code.c_str(), i));
+          path = g_host_interface->GetGameMemoryCardPath(s_running_game_code.c_str(), i);
         }
       }
       break;
@@ -1115,11 +1115,11 @@ void UpdateMemoryCards()
                                                    "Per-game memory card cannot be used for slot %u as the running "
                                                    "game has no title. Using shared card instead.",
                                                    i + 1u);
-          card = MemoryCard::Open(g_host_interface->GetSharedMemoryCardPath(i));
+          path = g_host_interface->GetSharedMemoryCardPath(i);
         }
         else
         {
-          card = MemoryCard::Open(g_host_interface->GetGameMemoryCardPath(s_running_game_title.c_str(), i));
+          path = g_host_interface->GetGameMemoryCardPath(s_running_game_title.c_str(), i);
         }
       }
       break;
@@ -1130,18 +1130,21 @@ void UpdateMemoryCards()
         {
           g_host_interface->AddFormattedOSDMessage(2.0f, "Memory card path for slot %u is missing, using default.",
                                                    i + 1u);
-          card = MemoryCard::Open(g_host_interface->GetSharedMemoryCardPath(i));
+          path = g_host_interface->GetSharedMemoryCardPath(i);
         }
         else
         {
-          card = MemoryCard::Open(g_settings.memory_card_paths[i]);
+          path = g_settings.memory_card_paths[i];
         }
       }
       break;
     }
 
-    if (card)
-      g_pad.SetMemoryCard(i, std::move(card));
+    std::vector<u8> data = g_host_interface->LoadMemoryCard(path, i);
+    if (data.empty())
+      g_host_interface->AddFormattedOSDMessage(5.0f, "Memory card in slot %u could not be loaded, formatting.", i + 1u);
+
+    g_pad.SetMemoryCard(i, std::make_unique<MemoryCard>(i, std::move(path), std::move(data)));
   }
 }
 

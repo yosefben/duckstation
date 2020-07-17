@@ -1,6 +1,4 @@
 #include "memory_card.h"
-#include "common/byte_stream.h"
-#include "common/file_system.h"
 #include "common/log.h"
 #include "common/state_wrapper.h"
 #include "common/string_util.h"
@@ -9,31 +7,42 @@
 #include <cstdio>
 Log_SetChannel(MemoryCard);
 
-MemoryCard::MemoryCard()
+MemoryCard::MemoryCard(u32 slot, std::string path, std::vector<u8> data) : m_path(std::move(path)), m_slot(slot)
 {
   m_FLAG.no_write_yet = true;
 
   m_save_event =
     TimingEvents::CreateTimingEvent("Memory Card Host Flush", SAVE_DELAY_IN_SYSCLK_TICKS, SAVE_DELAY_IN_SYSCLK_TICKS,
-                                    std::bind(&MemoryCard::SaveIfChanged, this, true), false);
+                                    std::bind(&MemoryCard::SaveIfChanged, this), false);
+
+  if (!data.empty() && data.size() != DATA_SIZE)
+  {
+    Log_ErrorPrintf("Incorrect memory size %zu", data.size());
+    data.clear();
+  }
+
+  if (data.empty())
+    InitializeMemoryCardData(m_data);
+  else
+    std::memcpy(m_data.data(), data.data(), DATA_SIZE);
 }
 
 MemoryCard::~MemoryCard()
 {
-  SaveIfChanged(false);
+  SaveIfChanged();
 }
 
 void MemoryCard::Reset()
 {
   ResetTransferState();
-  SaveIfChanged(true);
+  SaveIfChanged();
   m_FLAG.no_write_yet = true;
 }
 
 bool MemoryCard::DoState(StateWrapper& sw)
 {
   if (sw.IsReading())
-    SaveIfChanged(true);
+    SaveIfChanged();
 
   sw.Do(&m_state);
   sw.Do(&m_FLAG.bits);
@@ -237,31 +246,6 @@ bool MemoryCard::Transfer(const u8 data_in, u8* data_out)
   return ack;
 }
 
-std::unique_ptr<MemoryCard> MemoryCard::Create()
-{
-  std::unique_ptr<MemoryCard> mc = std::make_unique<MemoryCard>();
-  mc->Format();
-  return mc;
-}
-
-std::unique_ptr<MemoryCard> MemoryCard::Open(std::string_view filename)
-{
-  std::unique_ptr<MemoryCard> mc = std::make_unique<MemoryCard>();
-  mc->m_filename = filename;
-  if (!mc->LoadFromFile())
-  {
-    SmallString message;
-    message.AppendString("Memory card at '");
-    message.AppendString(filename.data(), static_cast<u32>(filename.length()));
-    message.AppendString("' could not be read, formatting.");
-    Log_ErrorPrint(message);
-    g_host_interface->AddOSDMessage(message.GetCharArray(), 5.0f);
-    mc->Format();
-  }
-
-  return mc;
-}
-
 u8 MemoryCard::ChecksumFrame(const u8* fptr)
 {
   u8 value = 0;
@@ -271,14 +255,14 @@ u8 MemoryCard::ChecksumFrame(const u8* fptr)
   return value;
 }
 
-void MemoryCard::Format()
+void MemoryCard::InitializeMemoryCardData(DataArray& data)
 {
   // fill everything with FF
-  m_data.fill(u8(0xFF));
+  data.fill(u8(0xFF));
 
   // header
   {
-    u8* fptr = GetSectorPtr(0);
+    u8* fptr = GetSectorPtr(data, 0);
     std::fill_n(fptr, SECTOR_SIZE, u8(0));
     fptr[0] = 'M';
     fptr[1] = 'C';
@@ -288,7 +272,7 @@ void MemoryCard::Format()
   // directory
   for (u32 frame = 1; frame < 16; frame++)
   {
-    u8* fptr = GetSectorPtr(frame);
+    u8* fptr = GetSectorPtr(data, frame);
     std::fill_n(fptr, SECTOR_SIZE, u8(0));
     fptr[0] = 0xA0;                   // free
     fptr[8] = 0xFF;                   // pointer to next file
@@ -299,7 +283,7 @@ void MemoryCard::Format()
   // broken sector list
   for (u32 frame = 16; frame < 36; frame++)
   {
-    u8* fptr = GetSectorPtr(frame);
+    u8* fptr = GetSectorPtr(data, frame);
     std::fill_n(fptr, SECTOR_SIZE, u8(0));
     fptr[0] = 0xFF;
     fptr[1] = 0xFF;
@@ -313,48 +297,28 @@ void MemoryCard::Format()
   // broken sector replacement data
   for (u32 frame = 36; frame < 56; frame++)
   {
-    u8* fptr = GetSectorPtr(frame);
+    u8* fptr = GetSectorPtr(data, frame);
     std::fill_n(fptr, SECTOR_SIZE, u8(0x00));
   }
 
   // unused frames
   for (u32 frame = 56; frame < 63; frame++)
   {
-    u8* fptr = GetSectorPtr(frame);
+    u8* fptr = GetSectorPtr(data, frame);
     std::fill_n(fptr, SECTOR_SIZE, u8(0x00));
   }
 
   // write test frame
-  std::memcpy(GetSectorPtr(63), GetSectorPtr(0), SECTOR_SIZE);
-
-  m_changed = true;
+  std::memcpy(GetSectorPtr(data, 63), GetSectorPtr(data, 0), SECTOR_SIZE);
 }
 
-u8* MemoryCard::GetSectorPtr(u32 sector)
+u8* MemoryCard::GetSectorPtr(DataArray& data, u32 sector)
 {
   Assert(sector < NUM_SECTORS);
-  return &m_data[sector * SECTOR_SIZE];
+  return &data[sector * SECTOR_SIZE];
 }
 
-bool MemoryCard::LoadFromFile()
-{
-  std::unique_ptr<ByteStream> stream =
-    FileSystem::OpenFile(m_filename.c_str(), BYTESTREAM_OPEN_READ | BYTESTREAM_OPEN_STREAMED);
-  if (!stream)
-    return false;
-
-  const size_t num_read = stream->Read(m_data.data(), SECTOR_SIZE * NUM_SECTORS);
-  if (num_read != (SECTOR_SIZE * NUM_SECTORS))
-  {
-    Log_ErrorPrintf("Only read %zu of %u sectors from '%s'", num_read / SECTOR_SIZE, NUM_SECTORS, m_filename.c_str());
-    return false;
-  }
-
-  Log_InfoPrintf("Loaded memory card from %s", m_filename.c_str());
-  return true;
-}
-
-bool MemoryCard::SaveIfChanged(bool display_osd_message)
+bool MemoryCard::SaveIfChanged()
 {
   m_save_event->Deactivate();
 
@@ -363,29 +327,10 @@ bool MemoryCard::SaveIfChanged(bool display_osd_message)
 
   m_changed = false;
 
-  if (m_filename.empty())
-    return false;
-
-  std::unique_ptr<ByteStream> stream =
-    FileSystem::OpenFile(m_filename.c_str(), BYTESTREAM_OPEN_CREATE | BYTESTREAM_OPEN_TRUNCATE | BYTESTREAM_OPEN_WRITE |
-                                               BYTESTREAM_OPEN_ATOMIC_UPDATE | BYTESTREAM_OPEN_STREAMED);
-  if (!stream)
+  if (!g_host_interface->SaveMemoryCard(m_path, m_slot, m_data.data(), DATA_SIZE))
   {
-    Log_ErrorPrintf("Failed to open '%s' for writing.", m_filename.c_str());
+    Log_ErrorPrintf("Failed to save memory card in slot %u (%s)", m_slot, m_path.c_str());
     return false;
-  }
-
-  if (!stream->Write2(m_data.data(), SECTOR_SIZE * NUM_SECTORS) || !stream->Commit())
-  {
-    Log_ErrorPrintf("Failed to write sectors to '%s'", m_filename.c_str());
-    stream->Discard();
-    return false;
-  }
-
-  Log_InfoPrintf("Saved memory card to '%s'", m_filename.c_str());
-  if (display_osd_message)
-  {
-    g_host_interface->AddOSDMessage(StringUtil::StdStringFromFormat("Saved memory card to '%s'", m_filename.c_str()));
   }
 
   return true;
@@ -393,8 +338,8 @@ bool MemoryCard::SaveIfChanged(bool display_osd_message)
 
 void MemoryCard::QueueFileSave()
 {
-  // skip if the event is already pending, or we don't have a backing file
-  if (m_save_event->IsActive() || m_filename.empty())
+  // skip if the event is already pending
+  if (m_save_event->IsActive())
     return;
 
   // save in one second, that should be long enough for everything to finish writing

@@ -94,6 +94,12 @@ public:
   /// Returns the default path to a memory card for a specific game.
   virtual std::string GetGameMemoryCardPath(const char* game_code, u32 slot) const;
 
+  /// Loads a memory card from storage, where ever this is.
+  virtual std::vector<u8> LoadMemoryCard(const std::string& path, u32 slot);
+
+  /// Saves a memory card to storage, where ever this is.
+  virtual bool SaveMemoryCard(const std::string& path, u32 slot, const void* data, u32 data_size);
+
   /// Returns the path to the shader cache directory.
   virtual std::string GetShaderCacheBasePath() const;
 

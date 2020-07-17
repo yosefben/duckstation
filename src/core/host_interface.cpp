@@ -603,6 +603,28 @@ std::string HostInterface::GetGameMemoryCardPath(const char* game_code, u32 slot
   return GetUserDirectoryRelativePath("memcards/%s_%d.mcd", game_code, slot + 1);
 }
 
+std::vector<u8> HostInterface::LoadMemoryCard(const std::string& path, u32 slot)
+{
+  if (path.empty())
+    return {};
+
+  std::optional<std::vector<u8>> data = FileSystem::ReadBinaryFile(path.c_str());
+  if (!data.has_value())
+    return {};
+
+  Log_InfoPrintf("Read %zu bytes for memory card %u from '%s'", data->size(), slot + 1u, path.c_str());
+  return std::move(*data);
+}
+
+bool HostInterface::SaveMemoryCard(const std::string& path, u32 slot, const void* data, u32 data_size)
+{
+  if (path.empty())
+    return false;
+
+  Log_InfoPrintf("Writing %u bytes for memory card %u to '%s'", data_size, slot + 1u, path.c_str());
+  return FileSystem::WriteBinaryFile(path.c_str(), data, data_size);
+}
+
 bool HostInterface::GetBoolSettingValue(const char* section, const char* key, bool default_value /*= false*/)
 {
   std::string value = GetStringSettingValue(section, key, "");

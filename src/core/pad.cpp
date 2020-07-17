@@ -100,7 +100,7 @@ bool Pad::DoState(StateWrapper& sw)
     {
       Log_WarningPrintf("Skipping loading memory card %u from save state.", i + 1u);
 
-      MemoryCard dummy_card;
+      MemoryCard dummy_card(i);
       if (!sw.DoMarker("MemoryCard") || !dummy_card.DoState(sw))
         return false;
 
@@ -115,7 +115,7 @@ bool Pad::DoState(StateWrapper& sw)
     {
       g_host_interface->AddFormattedOSDMessage(
         2.0f, "Memory card %u present in save state but not in system. Creating temporary card.", i + 1u);
-      m_memory_cards[i] = MemoryCard::Create();
+      m_memory_cards[i] = std::make_unique<MemoryCard>(i);
     }
     else if (!card_present && m_memory_cards[i])
     {
