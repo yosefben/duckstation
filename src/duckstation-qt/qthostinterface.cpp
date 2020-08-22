@@ -1205,6 +1205,18 @@ void QtHostInterface::destroyImGuiContext()
   ImGui::DestroyContext();
 }
 
+TinyString QtHostInterface::TranslateString(const char* context, const char* str) const
+{
+  const QString translated(m_translator->translate(context, str));
+  return TinyString(translated.toUtf8().constData());
+}
+
+std::string QtHostInterface::TranslateStdString(const char* context, const char* str) const
+{
+  const QString translated(m_translator->translate(context, str));
+  return translated.toStdString();
+}
+
 QtHostInterface::Thread::Thread(QtHostInterface* parent) : QThread(parent), m_parent(parent) {}
 
 QtHostInterface::Thread::~Thread() = default;

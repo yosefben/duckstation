@@ -1240,14 +1240,14 @@ bool CommonHostInterface::AddRumbleToInputMap(const std::string& binding, u32 co
 
 void CommonHostInterface::RegisterGeneralHotkeys()
 {
-  RegisterHotkey(StaticString("General"), StaticString("FastForward"), StaticString("Fast Forward"),
+  RegisterHotkey(StaticString("General"), StaticString("FastForward"), TranslateString("Hotkeys", "Fast Forward"),
                  [this](bool pressed) {
                    m_speed_limiter_temp_disabled = pressed;
                    UpdateSpeedLimiterState();
                  });
 
-  RegisterHotkey(StaticString("General"), StaticString("ToggleFastForward"), StaticString("Toggle Fast Forward"),
-                 [this](bool pressed) {
+  RegisterHotkey(StaticString("General"), StaticString("ToggleFastForward"),
+                 TranslateString("Hotkeys", "Toggle Fast Forward"), [this](bool pressed) {
                    if (!pressed)
                    {
                      m_speed_limiter_temp_disabled = !m_speed_limiter_temp_disabled;
@@ -1257,19 +1257,19 @@ void CommonHostInterface::RegisterGeneralHotkeys()
                    }
                  });
 
-  RegisterHotkey(StaticString("General"), StaticString("ToggleFullscreen"), StaticString("Toggle Fullscreen"),
-                 [this](bool pressed) {
+  RegisterHotkey(StaticString("General"), StaticString("ToggleFullscreen"),
+                 TranslateString("Hotkeys", "Toggle Fullscreen"), [this](bool pressed) {
                    if (!pressed)
                      SetFullscreen(!IsFullscreen());
                  });
 
-  RegisterHotkey(StaticString("General"), StaticString("TogglePause"), StaticString("Toggle Pause"),
+  RegisterHotkey(StaticString("General"), StaticString("TogglePause"), TranslateString("Hotkeys", "Toggle Pause"),
                  [this](bool pressed) {
                    if (System::IsValid() && !pressed)
                      PauseSystem(!System::IsPaused());
                  });
 
-  RegisterHotkey(StaticString("General"), StaticString("PowerOff"), StaticString("Power Off System"),
+  RegisterHotkey(StaticString("General"), StaticString("PowerOff"), TranslateString("Hotkeys", "Power Off System"),
                  [this](bool pressed) {
                    if (!pressed && System::IsValid())
                    {
@@ -1290,53 +1290,55 @@ void CommonHostInterface::RegisterGeneralHotkeys()
                    }
                  });
 
-  RegisterHotkey(StaticString("General"), StaticString("Screenshot"), StaticString("Save Screenshot"),
+  RegisterHotkey(StaticString("General"), StaticString("Screenshot"), TranslateString("Hotkeys", "Save Screenshot"),
                  [this](bool pressed) {
                    if (!pressed && System::IsValid())
                      SaveScreenshot();
                  });
 
-  RegisterHotkey(StaticString("General"), StaticString("FrameStep"), StaticString("Frame Step"), [this](bool pressed) {
-    if (!pressed)
-    {
-      DoFrameStep();
-    }
-  });
+  RegisterHotkey(StaticString("General"), StaticString("FrameStep"), TranslateString("Hotkeys", "Frame Step"),
+                 [this](bool pressed) {
+                   if (!pressed)
+                   {
+                     DoFrameStep();
+                   }
+                 });
 }
 
 void CommonHostInterface::RegisterGraphicsHotkeys()
 {
   RegisterHotkey(StaticString("Graphics"), StaticString("ToggleSoftwareRendering"),
-                 StaticString("Toggle Software Rendering"), [this](bool pressed) {
+                 TranslateString("Hotkeys", "Toggle Software Rendering"), [this](bool pressed) {
                    if (!pressed)
                      ToggleSoftwareRendering();
                  });
 
-  RegisterHotkey(
-    StaticString("Graphics"), StaticString("TogglePGXP"), StaticString("Toggle PGXP"), [this](bool pressed) {
-      if (!pressed)
-      {
-        g_settings.gpu_pgxp_enable = !g_settings.gpu_pgxp_enable;
-        g_gpu->UpdateSettings();
-        AddFormattedOSDMessage(5.0f, "PGXP is now %s.", g_settings.gpu_pgxp_enable ? "enabled" : "disabled");
+  RegisterHotkey(StaticString("Graphics"), StaticString("TogglePGXP"), TranslateString("Hotkeys", "Toggle PGXP"),
+                 [this](bool pressed) {
+                   if (!pressed)
+                   {
+                     g_settings.gpu_pgxp_enable = !g_settings.gpu_pgxp_enable;
+                     g_gpu->UpdateSettings();
+                     AddFormattedOSDMessage(5.0f, "PGXP is now %s.",
+                                            g_settings.gpu_pgxp_enable ? "enabled" : "disabled");
 
-        if (g_settings.gpu_pgxp_enable)
-          PGXP::Initialize();
+                     if (g_settings.gpu_pgxp_enable)
+                       PGXP::Initialize();
 
-        // we need to recompile all blocks if pgxp is toggled on/off
-        if (g_settings.IsUsingCodeCache())
-          CPU::CodeCache::Flush();
-      }
-    });
+                     // we need to recompile all blocks if pgxp is toggled on/off
+                     if (g_settings.IsUsingCodeCache())
+                       CPU::CodeCache::Flush();
+                   }
+                 });
 
   RegisterHotkey(StaticString("Graphics"), StaticString("IncreaseResolutionScale"),
-                 StaticString("Increase Resolution Scale"), [this](bool pressed) {
+                 TranslateString("Hotkeys", "Increase Resolution Scale"), [this](bool pressed) {
                    if (!pressed)
                      ModifyResolutionScale(1);
                  });
 
   RegisterHotkey(StaticString("Graphics"), StaticString("DecreaseResolutionScale"),
-                 StaticString("Decrease Resolution Scale"), [this](bool pressed) {
+                 TranslateString("Hotkeys", "Decrease Resolution Scale"), [this](bool pressed) {
                    if (!pressed)
                      ModifyResolutionScale(-1);
                  });
@@ -1345,80 +1347,93 @@ void CommonHostInterface::RegisterGraphicsHotkeys()
 void CommonHostInterface::RegisterSaveStateHotkeys()
 {
   RegisterHotkey(StaticString("Save States"), StaticString("LoadSelectedSaveState"),
-                 StaticString("Load From Selected Slot"), [this](bool pressed) {
+                 TranslateString("Hotkeys", "Load From Selected Slot"), [this](bool pressed) {
                    if (!pressed)
                      m_save_state_selector_ui->LoadCurrentSlot();
                  });
   RegisterHotkey(StaticString("Save States"), StaticString("SaveSelectedSaveState"),
-                 StaticString("Save To Selected Slot"), [this](bool pressed) {
+                 TranslateString("Hotkeys", "Save To Selected Slot"), [this](bool pressed) {
                    if (!pressed)
                      m_save_state_selector_ui->SaveCurrentSlot();
                  });
   RegisterHotkey(StaticString("Save States"), StaticString("SelectPreviousSaveStateSlot"),
-                 StaticString("Select Previous Save Slot"), [this](bool pressed) {
+                 TranslateString("Hotkeys", "Select Previous Save Slot"), [this](bool pressed) {
                    if (!pressed)
                      m_save_state_selector_ui->SelectPreviousSlot();
                  });
   RegisterHotkey(StaticString("Save States"), StaticString("SelectNextSaveStateSlot"),
-                 StaticString("Select Next Save Slot"), [this](bool pressed) {
+                 TranslateString("Hotkeys", "Select Next Save Slot"), [this](bool pressed) {
                    if (!pressed)
                      m_save_state_selector_ui->SelectNextSlot();
                  });
 
-  for (u32 global_i = 0; global_i < 2; global_i++)
+  for (u32 slot = 1; slot <= PER_GAME_SAVE_STATE_SLOTS; slot++)
   {
-    const bool global = ConvertToBoolUnchecked(global_i);
-    const u32 count = global ? GLOBAL_SAVE_STATE_SLOTS : PER_GAME_SAVE_STATE_SLOTS;
-    for (u32 slot = 1; slot <= count; slot++)
-    {
-      RegisterHotkey(StaticString("Save States"),
-                     TinyString::FromFormat("Load%sState%u", global ? "Global" : "Game", slot),
-                     TinyString::FromFormat("Load %s State %u", global ? "Global" : "Game", slot),
-                     [this, global, slot](bool pressed) {
-                       if (!pressed)
-                         LoadState(global, slot);
-                     });
-      RegisterHotkey(StaticString("Save States"),
-                     TinyString::FromFormat("Save%sState%u", global ? "Global" : "Game", slot),
-                     TinyString::FromFormat("Save %s State %u", global ? "Global" : "Game", slot),
-                     [this, global, slot](bool pressed) {
-                       if (!pressed)
-                         SaveState(global, slot);
-                     });
-    }
+    RegisterHotkey(StaticString("Save States"), TinyString::FromFormat("LoadGameState%u", slot),
+                   TinyString::FromFormat(TranslateString("Hotkeys", "Load Game State %u"), slot),
+                   [this, slot](bool pressed) {
+                     if (!pressed)
+                       LoadState(false, slot);
+                   });
+    RegisterHotkey(StaticString("Save States"), TinyString::FromFormat("SaveGameState%u", slot),
+                   TinyString::FromFormat(TranslateString("Hotkeys", "Save Game State %u"), slot),
+                   [this, slot](bool pressed) {
+                     if (!pressed)
+                       SaveState(false, slot);
+                   });
+  }
+
+  for (u32 slot = 1; slot <= GLOBAL_SAVE_STATE_SLOTS; slot++)
+  {
+    RegisterHotkey(StaticString("Save States"), TinyString::FromFormat("LoadGlobalState%u", slot),
+                   TinyString::FromFormat(TranslateString("Hotkeys", "Load Global State %u"), slot),
+                   [this, slot](bool pressed) {
+                     if (!pressed)
+                       LoadState(true, slot);
+                   });
+    RegisterHotkey(StaticString("Save States"), TinyString::FromFormat("SaveGlobalState%u", slot),
+                   TinyString::FromFormat(TranslateString("Hotkeys", "Save Global State %u"), slot),
+                   [this, slot](bool pressed) {
+                     if (!pressed)
+                       SaveState(true, slot);
+                   });
   }
 }
 
 void CommonHostInterface::RegisterAudioHotkeys()
 {
-  RegisterHotkey(StaticString("Audio"), StaticString("AudioMute"), StaticString("Toggle Mute"), [this](bool pressed) {
-    if (System::IsValid() && !pressed)
-    {
-      g_settings.audio_output_muted = !g_settings.audio_output_muted;
-      m_audio_stream->SetOutputVolume(g_settings.audio_output_muted ? 0 : g_settings.audio_output_volume);
-      if (g_settings.audio_output_muted)
-        AddOSDMessage("Volume: Muted", 2.0f);
-      else
-        AddFormattedOSDMessage(2.0f, "Volume: %d%%", g_settings.audio_output_volume);
-    }
-  });
-  RegisterHotkey(StaticString("Audio"), StaticString("AudioVolumeUp"), StaticString("Volume Up"), [this](bool pressed) {
-    if (System::IsValid() && pressed)
-    {
-      g_settings.audio_output_volume = std::min<s32>(g_settings.audio_output_volume + 10, 100);
-      g_settings.audio_output_muted = false;
-      m_audio_stream->SetOutputVolume(g_settings.audio_output_volume);
-      AddFormattedOSDMessage(2.0f, "Volume: %d%%", g_settings.audio_output_volume);
-    }
-  });
-  RegisterHotkey(StaticString("Audio"), StaticString("AudioVolumeDown"), StaticString("Volume Down"),
+  RegisterHotkey(
+    StaticString("Audio"), StaticString("AudioMute"), TranslateString("Hotkeys", "Toggle Mute"), [this](bool pressed) {
+      if (System::IsValid() && !pressed)
+      {
+        g_settings.audio_output_muted = !g_settings.audio_output_muted;
+        m_audio_stream->SetOutputVolume(g_settings.audio_output_muted ? 0 : g_settings.audio_output_volume);
+        if (g_settings.audio_output_muted)
+          AddOSDMessage(TranslateStdString("OSDMessage", "Volume: Muted"), 2.0f);
+        else
+          AddFormattedOSDMessage(2.0f, TranslateString("OSDMessage", "Volume: %d%%"), g_settings.audio_output_volume);
+      }
+    });
+  RegisterHotkey(StaticString("Audio"), StaticString("AudioVolumeUp"), TranslateString("Hotkeys", "Volume Up"),
+                 [this](bool pressed) {
+                   if (System::IsValid() && pressed)
+                   {
+                     g_settings.audio_output_volume = std::min<s32>(g_settings.audio_output_volume + 10, 100);
+                     g_settings.audio_output_muted = false;
+                     m_audio_stream->SetOutputVolume(g_settings.audio_output_volume);
+                     AddFormattedOSDMessage(2.0f, TranslateString("OSDMessage", "Volume: %d%%"),
+                                            g_settings.audio_output_volume);
+                   }
+                 });
+  RegisterHotkey(StaticString("Audio"), StaticString("AudioVolumeDown"), TranslateString("Hotkeys", "Volume Down"),
                  [this](bool pressed) {
                    if (System::IsValid() && pressed)
                    {
                      g_settings.audio_output_volume = std::max<s32>(g_settings.audio_output_volume - 10, 0);
                      g_settings.audio_output_muted = false;
                      m_audio_stream->SetOutputVolume(g_settings.audio_output_volume);
-                     AddFormattedOSDMessage(2.0f, "Volume: %d%%", g_settings.audio_output_volume);
+                     AddFormattedOSDMessage(2.0f, TranslateString("OSDMessage", "Volume: %d%%"),
+                                            g_settings.audio_output_volume);
                    }
                  });
 }
@@ -1554,7 +1569,7 @@ void CommonHostInterface::ApplyInputProfile(const char* profile_path, SettingsIn
 
   UpdateInputMap(si);
 
-  ReportFormattedMessage("Loaded input profile from '%s'", profile_path);
+  ReportFormattedMessage(TranslateString("OSDMessage", "Loaded input profile from '%s'"), profile_path);
 }
 
 bool CommonHostInterface::SaveInputProfile(const char* profile_path, SettingsInterface& si)
@@ -2018,11 +2033,12 @@ bool CommonHostInterface::SaveScreenshot(const char* filename /* = nullptr */, b
   const bool screenshot_saved = m_display->WriteDisplayTextureToFile(filename, full_resolution, apply_aspect_ratio);
   if (!screenshot_saved)
   {
-    AddFormattedOSDMessage(10.0f, "Failed to save screenshot to '%s'", filename);
+    AddFormattedOSDMessage(10.0f, TranslateString("OSDMessage", "Failed to save screenshot to '%s'"),
+                           filename);
     return false;
   }
 
-  AddFormattedOSDMessage(5.0f, "Screenshot saved to '%s'.", filename);
+  AddFormattedOSDMessage(5.0f, TranslateString("OSDMessage", "Screenshot saved to '%s'."), filename);
   return true;
 }
 
