@@ -95,20 +95,7 @@ ALWAYS_INLINE bool IsCacheableAddress(PhysicalMemoryAddress address)
 }
 
 /// Reads a cachable address (RAM or BIOS).
-ALWAYS_INLINE u32 ReadCacheableAddress(PhysicalMemoryAddress address)
-{
-  u32 value;
-  if (address < RAM_MIRROR_END)
-  {
-    std::memcpy(&value, &g_ram[address & RAM_MASK], sizeof(value));
-    return value;
-  }
-  else
-  {
-    std::memcpy(&value, &g_bios[address & BIOS_MASK], sizeof(value));
-    return value;
-  }
-}
+u32 ReadCacheableAddress(PhysicalMemoryAddress address, TickCount* ticks);
 
 /// Returns true if the address specified is writable (RAM).
 ALWAYS_INLINE bool IsRAMAddress(PhysicalMemoryAddress address) { return address < RAM_MIRROR_END; }

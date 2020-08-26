@@ -34,8 +34,30 @@ ALWAYS_INLINE static void DispatchInterrupt()
     g_state.regs.pc);
 }
 
+// icache stuff
+ALWAYS_INLINE static u32 GetICacheLine(VirtualMemoryAddress address)
+{
+  return ((address >> 4) & 0xFFu);
+}
+ALWAYS_INLINE static u32 GetICacheLineOffset(VirtualMemoryAddress address)
+{
+  return (address & (ICACHE_LINE_SIZE - 1));
+}
+ALWAYS_INLINE static u32 GetICacheTagForAddress(VirtualMemoryAddress address)
+{
+  return (address & 0xFFFFFFF0u);
+}
+ALWAYS_INLINE_RELEASE static bool CompareICacheTag(VirtualMemoryAddress address)
+{
+  const u32 line = GetICacheLine(address);
+  return (g_state.icache_tags[line] == GetICacheTagForAddress(address));
+}
+
+u32 FillICache(VirtualMemoryAddress address);
+
 // defined in cpu_memory.cpp - memory access functions which return false if an exception was thrown.
 bool FetchInstruction();
+bool SafeReadInstruction(VirtualMemoryAddress addr, u32* value);
 bool ReadMemoryByte(VirtualMemoryAddress addr, u8* value);
 bool ReadMemoryHalfWord(VirtualMemoryAddress addr, u16* value);
 bool ReadMemoryWord(VirtualMemoryAddress addr, u32* value);

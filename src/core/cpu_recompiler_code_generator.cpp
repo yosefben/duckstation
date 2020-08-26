@@ -840,6 +840,17 @@ void CodeGenerator::BlockPrologue()
 {
   EmitStoreCPUStructField(offsetof(State, exception_raised), Value::FromConstantU8(0));
 
+  if (m_block->fetch_cycles > 0)
+  {
+    Value reg = CalculatePC();
+    EmitShr(reg.GetHostRegister(), reg.GetHostRegister(), RegSize_32, Value::FromConstantU32(29));
+    LabelType is_cached;
+    EmitConditionalBranch(Condition::LessEqual, false, reg.GetHostRegister(), Value::FromConstantU32(4), &is_cached);
+    EmitAddCPUStructField(offsetof(State, pending_ticks),
+                          Value::FromConstantU32(static_cast<u32>(m_block->fetch_cycles)));
+    EmitBindLabel(&is_cached);
+  }
+
   // we don't know the state of the last block, so assume load delays might be in progress
   // TODO: Pull load delay into register cache
   m_current_instruction_in_branch_delay_slot_dirty = true;

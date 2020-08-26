@@ -139,8 +139,7 @@ static void ExecuteImpl()
     {
       if (HasPendingInterrupt())
       {
-        // TODO: Fill in m_next_instruction...
-        SafeReadMemoryWord(g_state.regs.pc, &g_state.next_instruction.bits);
+        SafeReadInstruction(g_state.regs.pc, &g_state.next_instruction.bits);
         DispatchInterrupt();
         next_block_key = GetNextBlockKey();
       }
@@ -247,7 +246,7 @@ void ExecuteRecompiler()
     {
       if (HasPendingInterrupt())
       {
-        SafeReadMemoryWord(g_state.regs.pc, &g_state.next_instruction.bits);
+        SafeReadInstruction(g_state.regs.pc, &g_state.next_instruction.bits);
         DispatchInterrupt();
       }
 
@@ -351,7 +350,8 @@ bool RevalidateBlock(CodeBlock* block)
 {
   for (const CodeBlockInstruction& cbi : block->instructions)
   {
-    u32 new_code = Bus::ReadCacheableAddress(cbi.pc & PHYSICAL_MEMORY_ADDRESS_MASK);
+    TickCount ticks_unused;
+    u32 new_code = Bus::ReadCacheableAddress(cbi.pc & PHYSICAL_MEMORY_ADDRESS_MASK, &ticks_unused);
     if (cbi.instruction.bits != new_code)
     {
       Log_DebugPrintf("Block 0x%08X changed at PC 0x%08X - %08X to %08X - recompiling.", block->GetPC(), cbi.pc,
@@ -395,6 +395,8 @@ bool CompileBlock(CodeBlock* block)
     __debugbreak();
 #endif
 
+  u32 last_cache_line = ICACHE_LINES;
+
   for (;;)
   {
     CodeBlockInstruction cbi = {};
@@ -403,7 +405,8 @@ bool CompileBlock(CodeBlock* block)
     if (!Bus::IsCacheableAddress(phys_addr))
       break;
 
-    cbi.instruction.bits = Bus::ReadCacheableAddress(phys_addr);
+    TickCount fetch_cycles;
+    cbi.instruction.bits = Bus::ReadCacheableAddress(phys_addr, &fetch_cycles);
     if (!IsInvalidInstruction(cbi.instruction))
       break;
 
@@ -415,6 +418,14 @@ bool CompileBlock(CodeBlock* block)
     cbi.is_store_instruction = IsMemoryStoreInstruction(cbi.instruction);
     cbi.has_load_delay = InstructionHasLoadDelay(cbi.instruction);
     cbi.can_trap = CanInstructionTrap(cbi.instruction, InUserMode());
+
+    const u32 icache_line = GetICacheLine(pc);
+    if (icache_line != last_cache_line)
+    {
+      block->icache_line_count++;
+      last_cache_line = icache_line;
+    }
+    block->fetch_cycles += fetch_cycles;
 
     // instruction is decoded now
     block->instructions.push_back(cbi);
