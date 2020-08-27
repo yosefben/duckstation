@@ -191,6 +191,9 @@ void CodeGenerator::EmitBeginBlock()
   const bool cpu_reg_allocated = m_register_cache.AllocateHostReg(RCPUPTR);
   DebugAssert(cpu_reg_allocated);
   m_emit->mov(GetCPUPtrReg(), reinterpret_cast<size_t>(&g_state));
+
+  if (m_block->has_in_block_branches)
+    m_register_cache.ReserveCallerSavedRegisters();
 }
 
 void CodeGenerator::EmitEndBlock()

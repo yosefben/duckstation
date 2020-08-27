@@ -34,7 +34,7 @@ bool CodeGenerator::CompileBlock(const CodeBlock* block, CodeBlock::HostCodePoin
   const CodeBlockInstruction* cbi = m_block_start;
   while (cbi != m_block_end)
   {
-#ifndef Y_BUILD_CONFIG_RELEASE
+#ifdef _DEBUG
     SmallString disasm;
     DisassembleInstruction(&disasm, cbi->pc, cbi->instruction.bits, nullptr);
     Log_DebugPrintf("Compiling instruction '%s'", disasm.GetCharArray());
@@ -801,6 +801,17 @@ Value CodeGenerator::NotValue(const Value& val)
   return res;
 }
 
+LabelType* CodeGenerator::GetBranchTargetLabel(VirtualMemoryAddress pc)
+{
+  for (auto& it : m_branch_targets)
+  {
+    if (it.first == pc)
+      return &it.second;
+  }
+
+  return nullptr;
+}
+
 void CodeGenerator::GenerateExceptionExit(const CodeBlockInstruction& cbi, Exception excode,
                                           Condition condition /* = Condition::Always */)
 {
@@ -871,6 +882,21 @@ void CodeGenerator::InstructionPrologue(const CodeBlockInstruction& cbi, TickCou
 #if defined(_DEBUG) && defined(CPU_X64)
   m_emit->nop();
 #endif
+
+  // flush and reload registers on branch targets since we'll be coming back here
+  if (cbi.is_direct_branch_target)
+  {
+    if (&cbi != m_block_start)
+    {
+      AddPendingCycles(true);
+      m_register_cache.FlushAllGuestRegisters(true, true);
+      SyncPC();
+    }
+    LabelType label;
+    EmitBindLabel(&label);
+    m_branch_targets.emplace_back(cbi.pc, std::move(label));
+    m_load_delay_dirty = true;
+  }
 
   // move instruction offsets forward
   m_current_instruction_pc_offset = m_pc_offset;
@@ -993,6 +1019,17 @@ void CodeGenerator::WriteNewPC(const Value& value, bool commit)
   EmitStoreGuestRegister(Reg::pc, value);
   if (commit)
     m_next_pc_offset = 0;
+}
+
+void CodeGenerator::SyncPC()
+{
+  if (m_pc_offset == 0)
+    return;
+
+  EmitAddCPUStructField(offsetof(State, regs.pc), Value::FromConstantU32(m_pc_offset));
+
+  m_pc_offset = 0;
+  m_next_pc_offset = 4;
 }
 
 bool CodeGenerator::Compile_Fallback(const CodeBlockInstruction& cbi)
@@ -1599,7 +1636,8 @@ bool CodeGenerator::Compile_Branch(const CodeBlockInstruction& cbi)
 {
   InstructionPrologue(cbi, 1);
 
-  auto DoBranch = [this](Condition condition, const Value& lhs, const Value& rhs, Reg lr_reg, Value&& branch_target) {
+  auto DoBranch = [this, &cbi](Condition condition, const Value& lhs, const Value& rhs, Reg lr_reg,
+                              Value&& branch_target) {
     // ensure the lr register is flushed, since we want it's correct value after the branch
     // we don't want to invalidate it yet because of "jalr r0, r0", branch_target could be the lr_reg.
     if (lr_reg != Reg::count && lr_reg != Reg::zero)
@@ -1665,6 +1703,65 @@ bool CodeGenerator::Compile_Branch(const CodeBlockInstruction& cbi)
       SwitchToNearCode();
 
       m_register_cache.PopState();
+    }
+
+    // if it's an in-branch block, we can skip writing the PC since it's synced anyway
+    LabelType* in_branch_target;
+    if (cbi.is_direct_branch_in_block &&
+        (in_branch_target = GetBranchTargetLabel(GetDirectBranchTarget(cbi.instruction, cbi.pc))) != nullptr)
+    {
+      LabelType normal_branch_exit;
+
+      TickCount old_delayed_cycles_add = m_delayed_cycles_add;
+      TickCount old_pc_offset = m_pc_offset;
+      TickCount old_current_instruction_pc_offset = m_current_instruction_pc_offset;
+      TickCount old_next_pc_offset = m_next_pc_offset;
+
+      m_register_cache.PushState();
+      {
+        // check downcount
+        {
+          Value pending_ticks = m_register_cache.AllocateScratch(RegSize_32);
+          Value downcount = m_register_cache.AllocateScratch(RegSize_32);
+          EmitLoadCPUStructField(pending_ticks.GetHostRegister(), RegSize_32, offsetof(State, pending_ticks));
+          EmitLoadCPUStructField(downcount.GetHostRegister(), RegSize_32, offsetof(State, downcount));
+          if (m_delayed_cycles_add > 0)
+          {
+            EmitAdd(pending_ticks.GetHostRegister(), pending_ticks.GetHostRegister(),
+                    Value::FromConstantU32(m_delayed_cycles_add), false);
+          }
+
+          // pending < downcount
+          EmitConditionalBranch(Condition::GreaterEqual, false, pending_ticks.GetHostRegister(), downcount,
+                                &normal_branch_exit);
+        }
+
+        // all good to take the shortcut - finish this instruction and compile the delay slot
+        m_register_cache.UpdateLoadDelay();
+        WriteNewPC(branch_target, true);
+
+        const CodeBlockInstruction* delay_slot = &cbi + 1;
+        Assert(delay_slot != m_block_end && delay_slot->is_branch_delay_slot);
+        CompileInstruction(*delay_slot);
+
+        // ensure registers are all written back
+        m_register_cache.FlushAllGuestRegisters(true, true);
+        if (m_register_cache.HasLoadDelay())
+          m_register_cache.WriteLoadDelayToCPU(true);
+        AddPendingCycles(true);
+
+        // now, we can jump back in the block
+        EmitBranch(in_branch_target);
+      }
+
+      // restore back
+      m_register_cache.PopState();
+      m_delayed_cycles_add = old_delayed_cycles_add;
+      m_pc_offset = old_pc_offset;
+      m_current_instruction_pc_offset = old_current_instruction_pc_offset;
+      m_next_pc_offset = old_next_pc_offset;
+
+      EmitBindLabel(&normal_branch_exit);
     }
 
     if (condition != Condition::Always)

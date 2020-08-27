@@ -415,6 +415,22 @@ bool CompileBlock(CodeBlock* block)
     cbi.is_store_instruction = IsMemoryStoreInstruction(cbi.instruction);
     cbi.has_load_delay = InstructionHasLoadDelay(cbi.instruction);
     cbi.can_trap = CanInstructionTrap(cbi.instruction, InUserMode());
+    cbi.is_direct_branch_instruction = IsDirectBranchInstruction(cbi.instruction);
+    if (cbi.is_direct_branch_instruction)
+    {
+      // backwards branch?
+      VirtualMemoryAddress branch_pc = GetDirectBranchTarget(cbi.instruction, cbi.pc);
+      for (CodeBlockInstruction& other_cbi : block->instructions)
+      {
+        if (other_cbi.pc == branch_pc)
+        {
+          other_cbi.is_direct_branch_target = true;
+          cbi.is_direct_branch_in_block = true;
+          block->has_in_block_branches = true;
+          break;
+        }
+      }
+    }
 
     // instruction is decoded now
     block->instructions.push_back(cbi);

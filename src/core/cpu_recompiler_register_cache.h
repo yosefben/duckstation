@@ -241,6 +241,9 @@ public:
   /// Ensures a host register is free, removing any value cached.
   void EnsureHostRegFree(HostReg reg);
 
+  /// Preallocates caller saved registers, enabling later use without stack pushes.
+  void ReserveCallerSavedRegisters();
+
   /// Push/pop volatile host registers. Returns the number of registers pushed/popped.
   u32 PushCallerSavedRegisters() const;
   u32 PopCallerSavedRegisters() const;

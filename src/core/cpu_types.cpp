@@ -44,6 +44,46 @@ bool IsBranchInstruction(const Instruction& instruction)
   }
 }
 
+bool IsDirectBranchInstruction(const Instruction& instruction)
+{
+  switch (instruction.op)
+  {
+    case InstructionOp::j:
+    case InstructionOp::jal:
+    case InstructionOp::b:
+    case InstructionOp::beq:
+    case InstructionOp::bgtz:
+    case InstructionOp::blez:
+    case InstructionOp::bne:
+      return true;
+
+    default:
+      return false;
+  }
+}
+
+VirtualMemoryAddress GetDirectBranchTarget(const Instruction& instruction, VirtualMemoryAddress instruction_pc)
+{
+  const VirtualMemoryAddress pc = instruction_pc + 4;
+
+  switch (instruction.op)
+  {
+    case InstructionOp::j:
+    case InstructionOp::jal:
+      return (pc & UINT32_C(0xF0000000)) | (instruction.j.target << 2);
+
+    case InstructionOp::b:
+    case InstructionOp::beq:
+    case InstructionOp::bgtz:
+    case InstructionOp::blez:
+    case InstructionOp::bne:
+      return (pc + (instruction.i.imm_sext32() << 2));
+
+    default:
+      return pc;
+  }
+}
+
 bool IsMemoryLoadInstruction(const Instruction& instruction)
 {
   switch (instruction.op)
