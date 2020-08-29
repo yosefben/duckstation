@@ -738,7 +738,7 @@ ALWAYS_INLINE static TickCount DoDMAAccess(u32 offset, u32& value)
   }
 }
 
-u32 ReadCacheableAddress(PhysicalMemoryAddress address, TickCount* ticks)
+u32 ReadExecutableAddress(PhysicalMemoryAddress address, TickCount* ticks)
 {
   u32 value;
   if (address < RAM_MIRROR_END)
@@ -770,7 +770,7 @@ static ALWAYS_INLINE_RELEASE void DoInstructionRead(PhysicalMemoryAddress addres
   {
     std::memcpy(data, &g_ram[address & RAM_MASK], sizeof(u32) * word_count);
     if constexpr (add_ticks)
-      g_state.pending_ticks += (icache_read ? 4 : 4) * word_count;
+      g_state.pending_ticks += (icache_read ? 1 : 4) * word_count;
   }
   else if (address >= BIOS_BASE && address < (BIOS_BASE + BIOS_SIZE))
   {
@@ -782,6 +782,50 @@ static ALWAYS_INLINE_RELEASE void DoInstructionRead(PhysicalMemoryAddress addres
   {
     CPU::RaiseException(address, Cop0Registers::CAUSE::MakeValueForException(Exception::IBE, false, false, 0));
     std::memset(data, 0, sizeof(u32) * word_count);
+  }
+}
+
+TickCount GetICacheFillTicks(VirtualMemoryAddress address)
+{
+  using namespace Bus;
+
+  address &= PHYSICAL_MEMORY_ADDRESS_MASK;
+
+  if (address < 0x800000)
+  {
+    return 1 * (ICACHE_LINE_SIZE / sizeof(u32));
+  }
+  else if (address >= BIOS_BASE && address < (BIOS_BASE + BIOS_SIZE))
+  {
+    return m_bios_access_time[static_cast<u32>(MemoryAccessSize::Word)] * (ICACHE_LINE_SIZE / sizeof(u32));
+  }
+  else
+  {
+    return 0;
+  }
+}
+
+void CheckAndUpdateICacheTags(u32 line_count, TickCount cached_ticks_per_line, TickCount uncached_ticks)
+{
+  VirtualMemoryAddress current_pc = g_state.regs.pc;
+  if (IsCachedAddress(current_pc))
+  {
+    TickCount ticks = 0;
+    for (u32 i = 0; i < line_count; i++, current_pc += ICACHE_LINE_SIZE)
+    {
+      const u32 line = GetICacheLine(current_pc);
+      if (g_state.icache_tags[line] != current_pc)
+      {
+        g_state.icache_tags[line] = current_pc;
+        ticks += cached_ticks_per_line;
+      }
+    }
+
+    g_state.pending_ticks += ticks;
+  }
+  else
+  {
+    g_state.pending_ticks += uncached_ticks;
   }
 }
 
@@ -947,6 +991,10 @@ static ALWAYS_INLINE TickCount DoMemoryAccess(VirtualMemoryAddress address, u32&
   {
     return DoRAMAccess<type, size>(address, value);
   }
+  else if (address >= BIOS_BASE && address < (BIOS_BASE + BIOS_SIZE))
+  {
+    return DoBIOSAccess<type, size>(static_cast<u32>(address - BIOS_BASE), value);
+  }
   else if (address < EXP1_BASE)
   {
     return DoInvalidAccess(type, size, address, value);
@@ -1018,14 +1066,6 @@ static ALWAYS_INLINE TickCount DoMemoryAccess(VirtualMemoryAddress address, u32&
   else if (address < (EXP2_BASE + EXP2_SIZE))
   {
     return DoEXP2Access<type, size>(address & EXP2_MASK, value);
-  }
-  else if (address < BIOS_BASE)
-  {
-    return DoInvalidAccess(type, size, address, value);
-  }
-  else if (address < (BIOS_BASE + BIOS_SIZE))
-  {
-    return DoBIOSAccess<type, size>(static_cast<u32>(address - BIOS_BASE), value);
   }
   else
   {

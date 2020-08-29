@@ -1421,21 +1421,6 @@ void InterpretCachedBlock(const CodeBlock& block)
 {
   // set up the state so we've already fetched the instruction
   DebugAssert(g_state.regs.pc == block.GetPC());
-
-  if ((g_state.regs.pc >> 29) > 4)
-  {
-    g_state.pending_ticks += block.fetch_cycles;
-  }
-  else
-  {
-    u32 pc = g_state.regs.pc & 0xFFFFFFF0u;
-    for (u32 i = 0; i < block.icache_line_count; i++, pc += ICACHE_LINE_SIZE)
-    {
-      if (!CompareICacheTag(pc))
-        FillICache(pc);
-    }
-  }
-
   g_state.regs.npc = block.GetPC() + 4;
 
   for (const CodeBlockInstruction& cbi : block.instructions)

@@ -89,13 +89,13 @@ ALWAYS_INLINE PhysicalMemoryAddress UnmirrorAddress(PhysicalMemoryAddress addres
 }
 
 /// Returns true if the address specified is cacheable (RAM or BIOS).
-ALWAYS_INLINE bool IsCacheableAddress(PhysicalMemoryAddress address)
+ALWAYS_INLINE bool IsExecutableAddress(PhysicalMemoryAddress address)
 {
   return (address < RAM_MIRROR_END) || (address >= BIOS_BASE && address < (BIOS_BASE + BIOS_SIZE));
 }
 
 /// Reads a cachable address (RAM or BIOS).
-u32 ReadCacheableAddress(PhysicalMemoryAddress address, TickCount* ticks);
+u32 ReadExecutableAddress(PhysicalMemoryAddress address, TickCount* ticks);
 
 /// Returns true if the address specified is writable (RAM).
 ALWAYS_INLINE bool IsRAMAddress(PhysicalMemoryAddress address) { return address < RAM_MIRROR_END; }

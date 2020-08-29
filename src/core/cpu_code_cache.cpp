@@ -164,6 +164,7 @@ static void ExecuteImpl()
       LogCurrentState();
 #endif
 
+      CheckAndUpdateICacheTags(block->icache_line_count, block->icache_line_read_ticks, block->fetch_cycles);
       InterpretCachedBlock<pgxp_mode>(*block);
 
       if (g_state.pending_ticks >= g_state.downcount)
@@ -274,6 +275,8 @@ void SetUseRecompiler(bool enable)
   s_use_recompiler = enable;
   Flush();
 #endif
+
+  ClearICache();
 }
 
 void Flush()
@@ -351,7 +354,7 @@ bool RevalidateBlock(CodeBlock* block)
   for (const CodeBlockInstruction& cbi : block->instructions)
   {
     TickCount ticks_unused;
-    u32 new_code = Bus::ReadCacheableAddress(cbi.pc & PHYSICAL_MEMORY_ADDRESS_MASK, &ticks_unused);
+    u32 new_code = Bus::ReadExecutableAddress(cbi.pc & PHYSICAL_MEMORY_ADDRESS_MASK, &ticks_unused);
     if (cbi.instruction.bits != new_code)
     {
       Log_DebugPrintf("Block 0x%08X changed at PC 0x%08X - %08X to %08X - recompiling.", block->GetPC(), cbi.pc,
@@ -402,11 +405,11 @@ bool CompileBlock(CodeBlock* block)
     CodeBlockInstruction cbi = {};
 
     const PhysicalMemoryAddress phys_addr = pc & PHYSICAL_MEMORY_ADDRESS_MASK;
-    if (!Bus::IsCacheableAddress(phys_addr))
+    if (!Bus::IsExecutableAddress(phys_addr))
       break;
 
     TickCount fetch_cycles;
-    cbi.instruction.bits = Bus::ReadCacheableAddress(phys_addr, &fetch_cycles);
+    cbi.instruction.bits = Bus::ReadExecutableAddress(phys_addr, &fetch_cycles);
     if (!IsInvalidInstruction(cbi.instruction))
       break;
 
@@ -423,6 +426,7 @@ bool CompileBlock(CodeBlock* block)
     if (icache_line != last_cache_line)
     {
       block->icache_line_count++;
+      block->icache_line_count = GetICacheFillTicks(pc);
       last_cache_line = icache_line;
     }
     block->fetch_cycles += fetch_cycles;

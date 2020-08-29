@@ -35,6 +35,10 @@ ALWAYS_INLINE static void DispatchInterrupt()
 }
 
 // icache stuff
+ALWAYS_INLINE static bool IsCachedAddress(VirtualMemoryAddress address)
+{
+  return (address >> 29) <= 4;
+}
 ALWAYS_INLINE static u32 GetICacheLine(VirtualMemoryAddress address)
 {
   return ((address >> 4) & 0xFFu);
@@ -45,7 +49,7 @@ ALWAYS_INLINE static u32 GetICacheLineOffset(VirtualMemoryAddress address)
 }
 ALWAYS_INLINE static u32 GetICacheTagForAddress(VirtualMemoryAddress address)
 {
-  return (address & 0xFFFFFFF0u);
+  return (address & ICACHE_TAG_ADDRESS_MASK);
 }
 ALWAYS_INLINE_RELEASE static bool CompareICacheTag(VirtualMemoryAddress address)
 {
@@ -53,7 +57,9 @@ ALWAYS_INLINE_RELEASE static bool CompareICacheTag(VirtualMemoryAddress address)
   return (g_state.icache_tags[line] == GetICacheTagForAddress(address));
 }
 
+TickCount GetICacheFillTicks(VirtualMemoryAddress address);
 u32 FillICache(VirtualMemoryAddress address);
+void CheckAndUpdateICacheTags(u32 line_count, TickCount cached_ticks_per_line, TickCount uncached_ticks);
 
 // defined in cpu_memory.cpp - memory access functions which return false if an exception was thrown.
 bool FetchInstruction();

@@ -65,8 +65,7 @@ struct CodeBlock
   bool invalidated = false;
 
   u32 icache_line_count = 0;
-  u32 icache_line_start = 0;
-  //std::array<u32, CODE_BLOCK_MAX_CACHE_LINES> icache_tags{};
+  TickCount icache_line_read_ticks = 0;
 
   const u32 GetPC() const { return key.GetPC(); }
   const u32 GetSizeInBytes() const { return static_cast<u32>(instructions.size()) * sizeof(Instruction); }
