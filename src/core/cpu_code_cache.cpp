@@ -164,7 +164,9 @@ static void ExecuteImpl()
       LogCurrentState();
 #endif
 
-      CheckAndUpdateICacheTags(block->icache_line_count, block->icache_line_read_ticks, block->fetch_cycles);
+      if (g_settings.cpu_recompiler_icache)
+        CheckAndUpdateICacheTags(block->icache_line_count, block->uncached_fetch_ticks);
+
       InterpretCachedBlock<pgxp_mode>(*block);
 
       if (g_state.pending_ticks >= g_state.downcount)
@@ -275,8 +277,6 @@ void SetUseRecompiler(bool enable)
   s_use_recompiler = enable;
   Flush();
 #endif
-
-  ClearICache();
 }
 
 void Flush()
@@ -353,8 +353,8 @@ bool RevalidateBlock(CodeBlock* block)
 {
   for (const CodeBlockInstruction& cbi : block->instructions)
   {
-    TickCount ticks_unused;
-    u32 new_code = Bus::ReadExecutableAddress(cbi.pc & PHYSICAL_MEMORY_ADDRESS_MASK, &ticks_unused);
+    u32 new_code = 0;
+    SafeReadInstruction(cbi.pc, &new_code);
     if (cbi.instruction.bits != new_code)
     {
       Log_DebugPrintf("Block 0x%08X changed at PC 0x%08X - %08X to %08X - recompiling.", block->GetPC(), cbi.pc,
@@ -403,14 +403,7 @@ bool CompileBlock(CodeBlock* block)
   for (;;)
   {
     CodeBlockInstruction cbi = {};
-
-    const PhysicalMemoryAddress phys_addr = pc & PHYSICAL_MEMORY_ADDRESS_MASK;
-    if (!Bus::IsExecutableAddress(phys_addr))
-      break;
-
-    TickCount fetch_cycles;
-    cbi.instruction.bits = Bus::ReadExecutableAddress(phys_addr, &fetch_cycles);
-    if (!IsInvalidInstruction(cbi.instruction))
+    if (!SafeReadInstruction(pc, &cbi.instruction.bits) || !IsInvalidInstruction(cbi.instruction))
       break;
 
     cbi.pc = pc;
@@ -422,14 +415,17 @@ bool CompileBlock(CodeBlock* block)
     cbi.has_load_delay = InstructionHasLoadDelay(cbi.instruction);
     cbi.can_trap = CanInstructionTrap(cbi.instruction, InUserMode());
 
-    const u32 icache_line = GetICacheLine(pc);
-    if (icache_line != last_cache_line)
+    if (g_settings.cpu_recompiler_icache)
     {
-      block->icache_line_count++;
-      block->icache_line_count = GetICacheFillTicks(pc);
-      last_cache_line = icache_line;
+      const u32 icache_line = GetICacheLine(pc);
+      if (icache_line != last_cache_line)
+      {
+        block->icache_line_count++;
+        block->icache_line_count = GetICacheFillTicks(pc);
+        last_cache_line = icache_line;
+      }
+      block->uncached_fetch_ticks += GetInstructionReadTicks(pc);
     }
-    block->fetch_cycles += fetch_cycles;
 
     // instruction is decoded now
     block->instructions.push_back(cbi);

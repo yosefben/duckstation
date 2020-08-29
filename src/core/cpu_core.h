@@ -81,7 +81,7 @@ struct State
 
   // data cache (used as scratchpad)
   std::array<u8, DCACHE_SIZE> dcache = {};
-  std::array<u32, ICACHE_SLOTS> icache_tags = {};
+  std::array<u32, ICACHE_LINES> icache_tags = {};
   std::array<u8, ICACHE_SIZE> icache_data = {};
 };
 

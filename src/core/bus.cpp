@@ -738,35 +738,18 @@ ALWAYS_INLINE static TickCount DoDMAAccess(u32 offset, u32& value)
   }
 }
 
-u32 ReadExecutableAddress(PhysicalMemoryAddress address, TickCount* ticks)
-{
-  u32 value;
-  if (address < RAM_MIRROR_END)
-  {
-    std::memcpy(&value, &g_ram[address & RAM_MASK], sizeof(value));
-    *ticks = 4;
-    return value;
-  }
-  else
-  {
-    std::memcpy(&value, &g_bios[address & BIOS_MASK], sizeof(value));
-    *ticks = m_bios_access_time[static_cast<u32>(MemoryAccessSize::Word)];
-    return value;
-  }
-}
-
 } // namespace Bus
 
 namespace CPU {
 
 template<bool add_ticks, bool icache_read = false, u32 word_count = 1>
-static ALWAYS_INLINE_RELEASE void DoInstructionRead(PhysicalMemoryAddress address, void* data)
+ALWAYS_INLINE_RELEASE void DoInstructionRead(PhysicalMemoryAddress address, void* data)
 {
   using namespace Bus;
 
   address &= PHYSICAL_MEMORY_ADDRESS_MASK;
 
-  if (address < 0x800000)
+  if (address < RAM_MIRROR_END)
   {
     std::memcpy(data, &g_ram[address & RAM_MASK], sizeof(u32) * word_count);
     if constexpr (add_ticks)
@@ -785,13 +768,33 @@ static ALWAYS_INLINE_RELEASE void DoInstructionRead(PhysicalMemoryAddress addres
   }
 }
 
+TickCount GetInstructionReadTicks(VirtualMemoryAddress address)
+{
+  using namespace Bus;
+
+  address &= PHYSICAL_MEMORY_ADDRESS_MASK;
+
+  if (address < RAM_MIRROR_END)
+  {
+    return 4;
+  }
+  else if (address >= BIOS_BASE && address < (BIOS_BASE + BIOS_SIZE))
+  {
+    return m_bios_access_time[static_cast<u32>(MemoryAccessSize::Word)];
+  }
+  else
+  {
+    return 0;
+  }
+}
+
 TickCount GetICacheFillTicks(VirtualMemoryAddress address)
 {
   using namespace Bus;
 
   address &= PHYSICAL_MEMORY_ADDRESS_MASK;
 
-  if (address < 0x800000)
+  if (address < RAM_MIRROR_END)
   {
     return 1 * (ICACHE_LINE_SIZE / sizeof(u32));
   }
@@ -805,12 +808,13 @@ TickCount GetICacheFillTicks(VirtualMemoryAddress address)
   }
 }
 
-void CheckAndUpdateICacheTags(u32 line_count, TickCount cached_ticks_per_line, TickCount uncached_ticks)
+void CheckAndUpdateICacheTags(u32 line_count, TickCount uncached_ticks)
 {
-  VirtualMemoryAddress current_pc = g_state.regs.pc;
+  VirtualMemoryAddress current_pc = g_state.regs.pc & ICACHE_TAG_ADDRESS_MASK;
   if (IsCachedAddress(current_pc))
   {
     TickCount ticks = 0;
+    TickCount cached_ticks_per_line = GetICacheFillTicks(current_pc);
     for (u32 i = 0; i < line_count; i++, current_pc += ICACHE_LINE_SIZE)
     {
       const u32 line = GetICacheLine(current_pc);
