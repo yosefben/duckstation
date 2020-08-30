@@ -152,6 +152,7 @@ bool GPU::DoState(StateWrapper& sw)
   sw.Do(&m_crtc_state.display_vram_width);
   sw.Do(&m_crtc_state.display_vram_height);
   sw.Do(&m_crtc_state.horizontal_total);
+  sw.Do(&m_crtc_state.horizontal_sync_start);
   sw.Do(&m_crtc_state.horizontal_active_start);
   sw.Do(&m_crtc_state.horizontal_active_end);
   sw.Do(&m_crtc_state.horizontal_display_start);
@@ -164,6 +165,7 @@ bool GPU::DoState(StateWrapper& sw)
   sw.Do(&m_crtc_state.fractional_ticks);
   sw.Do(&m_crtc_state.current_tick_in_scanline);
   sw.Do(&m_crtc_state.current_scanline);
+  sw.Do(&m_crtc_state.fractional_dot_ticks);
   sw.Do(&m_crtc_state.in_hblank);
   sw.Do(&m_crtc_state.in_vblank);
   sw.Do(&m_crtc_state.interlaced_field);
@@ -644,15 +646,21 @@ TickCount GPU::GetPendingCommandTicks() const
 void GPU::UpdateCRTCTickEvent()
 {
   // figure out how many GPU ticks until the next vblank or event
-  const TickCount lines_until_vblank =
+  TickCount lines_until_event =
     (m_crtc_state.current_scanline >= m_crtc_state.vertical_display_end ?
        (m_crtc_state.vertical_total - m_crtc_state.current_scanline + m_crtc_state.vertical_display_end) :
        (m_crtc_state.vertical_display_end - m_crtc_state.current_scanline));
-  const TickCount lines_until_event = g_timers.IsExternalIRQEnabled(HBLANK_TIMER_INDEX) ?
-                                        std::min(g_timers.GetTicksUntilIRQ(HBLANK_TIMER_INDEX), lines_until_vblank) :
-                                        lines_until_vblank;
-  const TickCount ticks_until_event =
+  if (g_timers.IsExternalIRQEnabled(HBLANK_TIMER_INDEX))
+    lines_until_event = std::min(lines_until_event, g_timers.GetTicksUntilIRQ(HBLANK_TIMER_INDEX));
+
+  TickCount ticks_until_event =
     lines_until_event * m_crtc_state.horizontal_total - m_crtc_state.current_tick_in_scanline;
+  if (g_timers.IsExternalIRQEnabled(DOT_TIMER_INDEX))
+  {
+    const TickCount dots_until_irq = g_timers.GetTicksUntilIRQ(DOT_TIMER_INDEX);
+    const TickCount ticks_until_irq = (dots_until_irq * m_crtc_state.dot_clock_divider) - m_crtc_state.fractional_dot_ticks;
+    ticks_until_event = std::min(ticks_until_event, std::max<TickCount>(ticks_until_irq, 0));
+  }
 
 #if 0
   const TickCount ticks_until_hblank =
@@ -680,6 +688,15 @@ void GPU::CRTCTickEvent(TickCount ticks)
   {
     const TickCount gpu_ticks = SystemTicksToCRTCTicks(ticks, &m_crtc_state.fractional_ticks);
     m_crtc_state.current_tick_in_scanline += gpu_ticks;
+
+    if (g_timers.IsUsingExternalClock(DOT_TIMER_INDEX))
+    {
+      m_crtc_state.fractional_dot_ticks += gpu_ticks;
+      const TickCount dots = m_crtc_state.fractional_dot_ticks / m_crtc_state.dot_clock_divider;
+      m_crtc_state.fractional_dot_ticks = m_crtc_state.fractional_dot_ticks % m_crtc_state.dot_clock_divider;
+      if (dots > 0)
+        g_timers.AddTicks(DOT_TIMER_INDEX, dots);
+    }
   }
 
   if (m_crtc_state.current_tick_in_scanline < m_crtc_state.horizontal_total)
