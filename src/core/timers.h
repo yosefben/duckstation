@@ -34,6 +34,12 @@ public:
     return (cs.external_counting_enabled && (cs.mode.bits & ((1u << 4) | (1u << 5))) != 0);
   }
 
+  ALWAYS_INLINE bool IsSyncEnabled(u32 timer) const
+  {
+    const CounterState& cs = m_states[timer];
+    return cs.mode.sync_enable;
+  }
+
   TickCount GetTicksUntilIRQ(u32 timer) const;
 
   void AddTicks(u32 timer, TickCount ticks);

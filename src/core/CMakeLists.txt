@@ -52,6 +52,8 @@ add_library(core
     host_interface_progress_callback.h
     interrupt_controller.cpp
     interrupt_controller.h
+    konami_justifier.cpp
+    konami_justifier.h
     mdec.cpp
     mdec.h
     memory_card.cpp

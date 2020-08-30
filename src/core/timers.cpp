@@ -77,6 +77,9 @@ void Timers::SetGate(u32 timer, bool state)
   {
     if (state)
     {
+      if (!cs.external_counting_enabled)
+        m_sysclk_event->InvokeEarly();
+
       switch (cs.mode.sync_mode)
       {
         case SyncMode::ResetOnGate:
@@ -195,8 +198,10 @@ u32 Timers::ReadRegister(u32 offset)
         if (timer_index == 0 || g_gpu->IsCRTCScanlinePending())
           g_gpu->SynchronizeCRTC();
       }
-
-      m_sysclk_event->InvokeEarly();
+      else
+      {
+        m_sysclk_event->InvokeEarly();
+      }
 
       return cs.counter;
     }

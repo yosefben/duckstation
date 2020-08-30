@@ -75,6 +75,7 @@
     <ClCompile Include="host_interface.cpp" />
     <ClCompile Include="host_interface_progress_callback.cpp" />
     <ClCompile Include="interrupt_controller.cpp" />
+    <ClCompile Include="konami_justifier.cpp" />
     <ClCompile Include="mdec.cpp" />
     <ClCompile Include="memory_card.cpp" />
     <ClCompile Include="namco_guncon.cpp" />
@@ -124,6 +125,7 @@
     <ClInclude Include="host_interface.h" />
     <ClInclude Include="host_interface_progress_callback.h" />
     <ClInclude Include="interrupt_controller.h" />
+    <ClInclude Include="konami_justifier.h" />
     <ClInclude Include="mdec.h" />
     <ClInclude Include="memory_card.h" />
     <ClInclude Include="namco_guncon.h" />

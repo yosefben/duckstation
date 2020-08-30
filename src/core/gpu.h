@@ -201,6 +201,16 @@ public:
   // Converts window coordinates into horizontal ticks and scanlines. Returns false if out of range. Used for lightguns.
   bool ConvertScreenCoordinatesToBeamTicksAndLines(s32 window_x, s32 window_y, u32* out_tick, u32* out_line) const;
 
+  // Returns the current beam position.
+  void GetBeamPosition(u32* out_ticks, u32* out_line);
+
+  // Returns the number of system clock ticks until the specified tick/line.
+  TickCount GetSystemTicksUntilTicksAndLine(u32 ticks, u32 line);
+
+  // Returns the number of visible lines.
+  ALWAYS_INLINE u16 GetCRTCActiveStartLine() const { return m_crtc_state.vertical_active_start; }
+  ALWAYS_INLINE u16 GetCRTCActiveEndLine() const { return m_crtc_state.vertical_active_end; }
+
   // Returns the video clock frequency.
   TickCount GetCRTCFrequency() const;
 
@@ -388,6 +398,8 @@ protected:
 
   // Ticks for hblank/vblank.
   void CRTCTickEvent(TickCount ticks);
+  void SimulateCRTCFast(TickCount ticks);
+  void SimulateCRTCSlow(TickCount ticks);
   void CommandTickEvent(TickCount ticks);
 
   /// Returns 0 if the currently-displayed field is on odd lines (1,3,5,...) or 1 if even (2,4,6,...).

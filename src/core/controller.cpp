@@ -2,6 +2,7 @@
 #include "analog_controller.h"
 #include "common/state_wrapper.h"
 #include "digital_controller.h"
+#include "konami_justifier.h"
 #include "namco_guncon.h"
 #include "negcon.h"
 #include "playstation_mouse.h"
@@ -59,6 +60,9 @@ std::unique_ptr<Controller> Controller::Create(ControllerType type, u32 index)
     case ControllerType::NamcoGunCon:
       return NamcoGunCon::Create();
 
+    case ControllerType::KonamiJustifier:
+      return KonamiJustifier::Create();
+
     case ControllerType::PlayStationMouse:
       return PlayStationMouse::Create();
 
@@ -94,6 +98,9 @@ Controller::AxisList Controller::GetAxisNames(ControllerType type)
     case ControllerType::NamcoGunCon:
       return NamcoGunCon::StaticGetAxisNames();
 
+    case ControllerType::KonamiJustifier:
+      return KonamiJustifier::StaticGetAxisNames();
+
     case ControllerType::PlayStationMouse:
       return PlayStationMouse::StaticGetAxisNames();
 
@@ -118,6 +125,9 @@ Controller::ButtonList Controller::GetButtonNames(ControllerType type)
 
     case ControllerType::NamcoGunCon:
       return NamcoGunCon::StaticGetButtonNames();
+
+    case ControllerType::KonamiJustifier:
+      return KonamiJustifier::StaticGetButtonNames();
 
     case ControllerType::PlayStationMouse:
       return PlayStationMouse::StaticGetButtonNames();
@@ -144,6 +154,9 @@ u32 Controller::GetVibrationMotorCount(ControllerType type)
     case ControllerType::NamcoGunCon:
       return NamcoGunCon::StaticGetVibrationMotorCount();
 
+    case ControllerType::KonamiJustifier:
+      return KonamiJustifier::StaticGetVibrationMotorCount();
+
     case ControllerType::PlayStationMouse:
       return PlayStationMouse::StaticGetVibrationMotorCount();
 
@@ -168,6 +181,9 @@ std::optional<s32> Controller::GetAxisCodeByName(ControllerType type, std::strin
 
     case ControllerType::NamcoGunCon:
       return NamcoGunCon::StaticGetAxisCodeByName(axis_name);
+
+    case ControllerType::KonamiJustifier:
+      return KonamiJustifier::StaticGetAxisCodeByName(axis_name);
 
     case ControllerType::PlayStationMouse:
       return PlayStationMouse::StaticGetAxisCodeByName(axis_name);
@@ -194,6 +210,9 @@ std::optional<s32> Controller::GetButtonCodeByName(ControllerType type, std::str
     case ControllerType::NamcoGunCon:
       return NamcoGunCon::StaticGetButtonCodeByName(button_name);
 
+    case ControllerType::KonamiJustifier:
+      return KonamiJustifier::StaticGetButtonCodeByName(button_name);
+
     case ControllerType::PlayStationMouse:
       return PlayStationMouse::StaticGetButtonCodeByName(button_name);
 
@@ -215,6 +234,9 @@ Controller::SettingList Controller::GetSettings(ControllerType type)
 
     case ControllerType::NamcoGunCon:
       return NamcoGunCon::StaticGetSettings();
+
+    case ControllerType::KonamiJustifier:
+      return KonamiJustifier::StaticGetSettings();
 
     default:
       return {};
