@@ -203,6 +203,15 @@ uint RGBA8ToRGBA5551(float4 v)
   return (r) | (g << 5) | (b << 10) | (a << 15);
 }
 
+uint DenormalizeRGBA5551(float4 v)
+{
+  uint r = uint(roundEven(v.r * 31.0));
+  uint g = uint(roundEven(v.g * 31.0));
+  uint b = uint(roundEven(v.b * 31.0));
+  uint a = (v.a != 0.0) ? 1u : 0u;
+  return (r) | (g << 5) | (b << 10) | (a << 15);
+}
+
 float4 RGBA5551ToRGBA8(uint v)
 {
   uint r = (v & 31u);
@@ -216,6 +225,16 @@ float4 RGBA5551ToRGBA8(uint v)
   b = (b << 3) | (b & 7u);
 
   return float4(float(r) / 255.0, float(g) / 255.0, float(b) / 255.0, float(a));
+}
+
+float4 NormalizeRGBA5551(uint v)
+{
+  uint r = (v & 31u);
+  uint g = ((v >> 5) & 31u);
+  uint b = ((v >> 10) & 31u);
+  uint a = ((v >> 15) & 1u);
+
+  return float4(float(r) / 31.0, float(g) / 31.0, float(b) / 31.0, float(a));
 }
 )";
 }
@@ -686,7 +705,7 @@ float4 SampleFromVRAM(uint4 texpage, float2 coords)
 
     // load colour/palette
     float4 texel = SAMPLE_TEXTURE(samp0, float2(vicoord) * RCP_VRAM_SIZE);
-    uint vram_value = RGBA8ToRGBA5551(texel);
+    uint vram_value = DenormalizeRGBA5551(texel);
 
     // apply palette
     #if PALETTE_4_BIT
@@ -813,7 +832,7 @@ void BilinearSampleFromVRAM(uint4 texpage, float2 coords, float4 uv_limits,
 
     // If not using true color, truncate the framebuffer colors to 5-bit.
     #if !TRUE_COLOR
-      icolor = uint3(texcol.rgb * float3(255.0, 255.0, 255.0)) >> 3;
+      icolor = uint3(texcol.rgb * float3(31.0, 31.0, 31.0));
       #if !RAW_TEXTURE
         icolor = (icolor * vertcol) >> 4;
         #if DITHERING
@@ -1035,8 +1054,8 @@ std::string GPU_HW_ShaderGen::GenerateDisplayFragmentShader(bool depth_24bit,
     uint2 vram_coords = u_vram_offset + uint2(((relative_x * 3u) / 2u) * RESOLUTION_SCALE, icoords.y);
 
     // load adjacent 16-bit texels
-    uint s0 = RGBA8ToRGBA5551(LOAD_TEXTURE(samp0, int2(vram_coords % VRAM_SIZE), 0));
-    uint s1 = RGBA8ToRGBA5551(LOAD_TEXTURE(samp0, int2((vram_coords + uint2(RESOLUTION_SCALE, 0)) % VRAM_SIZE), 0));
+    uint s0 = DenormalizeRGBA5551(LOAD_TEXTURE(samp0, int2(vram_coords % VRAM_SIZE), 0));
+    uint s1 = DenormalizeRGBA5551(LOAD_TEXTURE(samp0, int2((vram_coords + uint2(RESOLUTION_SCALE, 0)) % VRAM_SIZE), 0));
     
     // select which part of the combined 16-bit texels we are currently shading
     uint s1s0 = ((s1 << 16) | s0) >> ((relative_x & 1u) * 8u);
@@ -1068,7 +1087,7 @@ std::string GPU_HW_ShaderGen::GenerateVRAMReadFragmentShader()
 uint SampleVRAM(uint2 coords)
 {
   if (RESOLUTION_SCALE == 1u)
-    return RGBA8ToRGBA5551(LOAD_TEXTURE(samp0, int2(coords), 0));
+    return DenormalizeRGBA5551(LOAD_TEXTURE(samp0, int2(coords), 0));
 
   // Box filter for downsampling.
   float4 value = float4(0.0, 0.0, 0.0, 0.0);
@@ -1079,7 +1098,7 @@ uint SampleVRAM(uint2 coords)
       value += LOAD_TEXTURE(samp0, int2(base_coords + uint2(offset_x, offset_y)), 0);
   }
   value /= float(RESOLUTION_SCALE * RESOLUTION_SCALE);
-  return RGBA8ToRGBA5551(value);
+  return DenormalizeRGBA5551(value);
 }
 )";
 
@@ -1159,7 +1178,7 @@ std::string GPU_HW_ShaderGen::GenerateVRAMWriteFragmentShader(bool use_ssbo)
   uint buffer_offset = u_buffer_base_offset + (offset.y * u_size.x) + offset.x;
   uint value = GET_VALUE(buffer_offset) | u_mask_or_bits;
   
-  o_col0 = RGBA5551ToRGBA8(value);
+  o_col0 = NormalizeRGBA5551(value);
   o_depth = (o_col0.a == 1.0) ? u_depth_value : 0.0;
 })";
 
