@@ -35,3 +35,6 @@ if(${CPU_ARCH} STREQUAL "aarch64")
   add_subdirectory(vixl)
 endif()
 
+if(BUILD_OGA_FRONTEND)
+  add_subdirectory(libgo2)
+endif()

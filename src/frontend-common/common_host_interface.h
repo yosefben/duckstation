@@ -249,7 +249,7 @@ protected:
   std::string GetMostRecentResumeSaveStatePath() const;
 
   /// Ensures the settings is valid and the correct version. If not, resets to defaults.
-  void CheckSettings(SettingsInterface& si);
+  bool CheckSettings(SettingsInterface& si);
 
   /// Restores all settings to defaults.
   virtual void SetDefaultSettings(SettingsInterface& si) override;

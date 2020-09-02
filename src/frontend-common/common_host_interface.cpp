@@ -408,6 +408,9 @@ void CommonHostInterface::PollAndUpdate()
 #ifdef WITH_DISCORD_PRESENCE
   PollDiscordPresence();
 #endif
+
+  if (m_controller_interface)
+    m_controller_interface->PollEvents();
 }
 
 bool CommonHostInterface::IsFullscreen() const
@@ -1862,17 +1865,18 @@ std::string CommonHostInterface::GetMostRecentResumeSaveStatePath() const
   return std::move(most_recent->FileName);
 }
 
-void CommonHostInterface::CheckSettings(SettingsInterface& si)
+bool CommonHostInterface::CheckSettings(SettingsInterface& si)
 {
   const int settings_version = si.GetIntValue("Main", "SettingsVersion", -1);
   if (settings_version == SETTINGS_VERSION)
-    return;
+    return true;
 
   ReportFormattedError("Settings version %d does not match expected version %d, resetting", settings_version,
                        SETTINGS_VERSION);
   si.Clear();
   si.SetIntValue("Main", "SettingsVersion", SETTINGS_VERSION);
   SetDefaultSettings(si);
+  return false;
 }
 
 void CommonHostInterface::SetDefaultSettings(SettingsInterface& si)
