@@ -72,6 +72,7 @@ struct Settings
   CPUExecutionMode cpu_execution_mode = CPUExecutionMode::Interpreter;
   bool cpu_recompiler_memory_exceptions = false;
   bool cpu_recompiler_icache = false;
+  bool cpu_thread = true;
 
   float emulation_speed = 1.0f;
   bool speed_limiter_enabled = true;

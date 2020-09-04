@@ -12,6 +12,7 @@
 #include "cpu_core.h"
 #include "dma.h"
 #include "gpu.h"
+#include "gpu_backend.h"
 #include "gte.h"
 #include "host_display.h"
 #include "pgxp.h"
@@ -554,7 +555,7 @@ void HostInterface::CheckForSettingsChanges(const Settings& old_settings)
         g_settings.display_active_start_offset != old_settings.display_active_start_offset ||
         g_settings.display_active_end_offset != old_settings.display_active_end_offset)
     {
-      g_gpu->UpdateSettings();
+      g_gpu.UpdateSettings();
     }
 
     if (g_settings.gpu_pgxp_enable != old_settings.gpu_pgxp_enable ||
@@ -726,7 +727,7 @@ void HostInterface::ToggleSoftwareRendering()
   if (System::IsShutdown() || g_settings.gpu_renderer == GPURenderer::Software)
     return;
 
-  const GPURenderer new_renderer = g_gpu->IsHardwareRenderer() ? GPURenderer::Software : g_settings.gpu_renderer;
+  const GPURenderer new_renderer = g_gpu_backend->IsHardwareRenderer() ? GPURenderer::Software : g_settings.gpu_renderer;
 
   AddFormattedOSDMessage(5.0f, "Switching to %s renderer...", Settings::GetRendererDisplayName(new_renderer));
   System::RecreateGPU(new_renderer);
@@ -743,9 +744,9 @@ void HostInterface::ModifyResolutionScale(s32 increment)
 
   if (!System::IsShutdown())
   {
-    g_gpu->RestoreGraphicsAPIState();
-    g_gpu->UpdateSettings();
-    g_gpu->ResetGraphicsAPIState();
+    g_gpu_backend->RestoreGraphicsAPIState();
+    g_gpu_backend->UpdateSettings();
+    g_gpu_backend->ResetGraphicsAPIState();
   }
 }
 

@@ -17,17 +17,18 @@ GPU_HW_Vulkan::GPU_HW_Vulkan() = default;
 
 GPU_HW_Vulkan::~GPU_HW_Vulkan()
 {
-  if (m_host_display)
+  if (g_host_interface->GetDisplay())
   {
-    m_host_display->ClearDisplayTexture();
+    g_host_interface->GetDisplay()->ClearDisplayTexture();
     ResetGraphicsAPIState();
   }
 
   DestroyResources();
 }
 
-bool GPU_HW_Vulkan::Initialize(HostDisplay* host_display)
+bool GPU_HW_Vulkan::Initialize()
 {
+  HostDisplay* host_display = g_host_interface->GetDisplay();
   if (host_display->GetRenderAPI() != HostDisplay::RenderAPI::Vulkan)
   {
     Log_ErrorPrintf("Host render API is incompatible");
@@ -37,7 +38,7 @@ bool GPU_HW_Vulkan::Initialize(HostDisplay* host_display)
   Assert(g_vulkan_shader_cache);
   SetCapabilities();
 
-  if (!GPU_HW::Initialize(host_display))
+  if (!GPU_HW::Initialize())
     return false;
 
   if (!CreatePipelineLayouts())
@@ -131,7 +132,7 @@ void GPU_HW_Vulkan::UpdateSettings()
   if (shaders_changed)
   {
     // clear it since we draw a loading screen and it's not in the correct state
-    m_host_display->ClearDisplayTexture();
+    g_host_interface->GetDisplay()->ClearDisplayTexture();
     DestroyPipelines();
     CompilePipelines();
   }
@@ -583,8 +584,8 @@ bool GPU_HW_Vulkan::CompilePipelines()
   VkDevice device = g_vulkan_context->GetDevice();
   VkPipelineCache pipeline_cache = g_vulkan_shader_cache->GetPipelineCache();
 
-  GPU_HW_ShaderGen shadergen(m_host_display->GetRenderAPI(), m_resolution_scale, m_true_color, m_scaled_dithering,
-                             m_texture_filtering, m_using_uv_limits, m_supports_dual_source_blend);
+  GPU_HW_ShaderGen shadergen(g_host_interface->GetDisplay()->GetRenderAPI(), m_resolution_scale, m_true_color,
+                             m_scaled_dithering, m_texture_filtering, m_using_uv_limits, m_supports_dual_source_blend);
 
   Common::Timer compile_time;
   const int progress_total = 2 + (4 * 9 * 2 * 2) + (2 * 4 * 5 * 9 * 2 * 2) + 1 + 2 + 2 + 2 + 2 + (2 * 3);
@@ -629,7 +630,7 @@ bool GPU_HW_Vulkan::CompilePipelines()
         for (u8 interlacing = 0; interlacing < 2; interlacing++)
         {
           const std::string fs = shadergen.GenerateBatchFragmentShader(
-            static_cast<BatchRenderMode>(render_mode), static_cast<TextureMode>(texture_mode),
+            static_cast<BatchRenderMode>(render_mode), static_cast<GPUTextureMode>(texture_mode),
             ConvertToBoolUnchecked(dithering), ConvertToBoolUnchecked(interlacing));
 
           VkShaderModule shader = g_vulkan_shader_cache->GetFragmentShader(fs);
@@ -658,7 +659,7 @@ bool GPU_HW_Vulkan::CompilePipelines()
           {
             for (u8 interlacing = 0; interlacing < 2; interlacing++)
             {
-              const bool textured = (static_cast<TextureMode>(texture_mode) != TextureMode::Disabled);
+              const bool textured = (static_cast<GPUTextureMode>(texture_mode) != GPUTextureMode::Disabled);
 
               gpbuilder.SetPipelineLayout(m_batch_pipeline_layout);
               gpbuilder.SetRenderPass(m_vram_render_pass, 0);
@@ -683,7 +684,7 @@ bool GPU_HW_Vulkan::CompilePipelines()
                                       (depth_test != 0) ? VK_COMPARE_OP_GREATER_OR_EQUAL : VK_COMPARE_OP_ALWAYS);
               gpbuilder.SetNoBlendingState();
 
-              if ((static_cast<TransparencyMode>(transparency_mode) != TransparencyMode::Disabled &&
+              if ((static_cast<GPUTransparencyMode>(transparency_mode) != GPUTransparencyMode::Disabled &&
                    (static_cast<BatchRenderMode>(render_mode) != BatchRenderMode::TransparencyDisabled &&
                     static_cast<BatchRenderMode>(render_mode) != BatchRenderMode::OnlyOpaque)) ||
                   m_texture_filtering != GPUTextureFilter::Nearest)
@@ -691,7 +692,8 @@ bool GPU_HW_Vulkan::CompilePipelines()
                 gpbuilder.SetBlendAttachment(
                   0, true, VK_BLEND_FACTOR_ONE,
                   m_supports_dual_source_blend ? VK_BLEND_FACTOR_SRC1_ALPHA : VK_BLEND_FACTOR_SRC_ALPHA,
-                  (static_cast<TransparencyMode>(transparency_mode) == TransparencyMode::BackgroundMinusForeground &&
+                  (static_cast<GPUTransparencyMode>(transparency_mode) ==
+                     GPUTransparencyMode::BackgroundMinusForeground &&
                    static_cast<BatchRenderMode>(render_mode) != BatchRenderMode::TransparencyDisabled &&
                    static_cast<BatchRenderMode>(render_mode) != BatchRenderMode::OnlyOpaque) ?
                     VK_BLEND_OP_REVERSE_SUBTRACT :
@@ -874,7 +876,7 @@ bool GPU_HW_Vulkan::CompilePipelines()
       for (u8 interlace_mode = 0; interlace_mode < 3; interlace_mode++)
       {
         VkShaderModule fs = g_vulkan_shader_cache->GetFragmentShader(shadergen.GenerateDisplayFragmentShader(
-          ConvertToBoolUnchecked(depth_24), static_cast<InterlacedRenderMode>(interlace_mode)));
+          ConvertToBoolUnchecked(depth_24), static_cast<GPUInterlacedDisplayMode>(interlace_mode)));
         if (fs == VK_NULL_HANDLE)
           return false;
 
@@ -940,7 +942,6 @@ void GPU_HW_Vulkan::SetScissorFromDrawingArea()
 
 void GPU_HW_Vulkan::ClearDisplay()
 {
-  GPU_HW::ClearDisplay();
   EndRenderPass();
 
   VkCommandBuffer cmdbuf = g_vulkan_context->GetCurrentCommandBuffer();
@@ -953,51 +954,51 @@ void GPU_HW_Vulkan::ClearDisplay()
 
 void GPU_HW_Vulkan::UpdateDisplay()
 {
-  GPU_HW::UpdateDisplay();
-  EndRenderPass();
+  HostDisplay* display = g_host_interface->GetDisplay();
 
   if (g_settings.debugging.show_vram)
   {
     m_vram_texture.TransitionToLayout(g_vulkan_context->GetCurrentCommandBuffer(),
                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    m_host_display->SetDisplayTexture(&m_vram_texture, m_vram_texture.GetWidth(), m_vram_texture.GetHeight(), 0, 0,
-                                      m_vram_texture.GetWidth(), m_vram_texture.GetHeight());
-    m_host_display->SetDisplayParameters(VRAM_WIDTH, VRAM_HEIGHT, 0, 0, VRAM_WIDTH, VRAM_HEIGHT,
-                                         static_cast<float>(VRAM_WIDTH) / static_cast<float>(VRAM_HEIGHT));
+    display->SetDisplayTexture(&m_vram_texture, m_vram_texture.GetWidth(), m_vram_texture.GetHeight(), 0, 0,
+                               m_vram_texture.GetWidth(), m_vram_texture.GetHeight());
+    display->SetDisplayParameters(VRAM_WIDTH, VRAM_HEIGHT, 0, 0, VRAM_WIDTH, VRAM_HEIGHT,
+                                  static_cast<float>(VRAM_WIDTH) / static_cast<float>(VRAM_HEIGHT));
   }
   else
   {
-    const u32 vram_offset_x = m_crtc_state.display_vram_left;
-    const u32 vram_offset_y = m_crtc_state.display_vram_top;
+    const u32 vram_offset_x = m_display_vram_left;
+    const u32 vram_offset_y = m_display_vram_top;
     const u32 scaled_vram_offset_x = vram_offset_x * m_resolution_scale;
     const u32 scaled_vram_offset_y = vram_offset_y * m_resolution_scale;
-    const u32 display_width = m_crtc_state.display_vram_width;
-    const u32 display_height = m_crtc_state.display_vram_height;
+    const u32 display_width = m_display_vram_width;
+    const u32 display_height = m_display_vram_height;
     const u32 scaled_display_width = display_width * m_resolution_scale;
     const u32 scaled_display_height = display_height * m_resolution_scale;
-    const InterlacedRenderMode interlaced = GetInterlacedRenderMode();
+    const GPUInterlacedDisplayMode interlaced = m_display_interlace;
 
-    if (IsDisplayDisabled())
+    if (!m_display_enabled)
     {
-      m_host_display->ClearDisplayTexture();
+      display->ClearDisplayTexture();
     }
-    else if (!m_GPUSTAT.display_area_color_depth_24 && interlaced == InterlacedRenderMode::None &&
+    else if (!m_display_24bit && interlaced == GPUInterlacedDisplayMode::None &&
              (scaled_vram_offset_x + scaled_display_width) <= m_vram_texture.GetWidth() &&
              (scaled_vram_offset_y + scaled_display_height) <= m_vram_texture.GetHeight())
     {
       m_vram_texture.TransitionToLayout(g_vulkan_context->GetCurrentCommandBuffer(),
                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-      m_host_display->SetDisplayTexture(&m_vram_texture, m_vram_texture.GetWidth(), m_vram_texture.GetHeight(),
-                                        scaled_vram_offset_x, scaled_vram_offset_y, scaled_display_width,
-                                        scaled_display_height);
+      display->SetDisplayTexture(&m_vram_texture, m_vram_texture.GetWidth(), m_vram_texture.GetHeight(),
+                                 scaled_vram_offset_x, scaled_vram_offset_y, scaled_display_width,
+                                 scaled_display_height);
     }
     else
     {
       EndRenderPass();
 
-      const u32 reinterpret_field_offset = (interlaced != InterlacedRenderMode::None) ? GetInterlacedDisplayField() : 0;
-      const u32 reinterpret_start_x = m_crtc_state.regs.X * m_resolution_scale;
-      const u32 reinterpret_crop_left = (m_crtc_state.display_vram_left - m_crtc_state.regs.X) * m_resolution_scale;
+      const u32 reinterpret_field_offset =
+        (interlaced != GPUInterlacedDisplayMode::None) ? m_display_interlace_field : 0;
+      const u32 reinterpret_start_x = m_display_vram_start_x * m_resolution_scale;
+      const u32 reinterpret_crop_left = (m_display_vram_left - m_display_vram_start_x) * m_resolution_scale;
       const u32 uniforms[4] = {reinterpret_start_x, scaled_vram_offset_y + reinterpret_field_offset,
                                reinterpret_crop_left, reinterpret_field_offset};
 
@@ -1007,9 +1008,8 @@ void GPU_HW_Vulkan::UpdateDisplay()
 
       BeginRenderPass(m_display_render_pass, m_display_framebuffer, 0, 0, scaled_display_width, scaled_display_height);
 
-      vkCmdBindPipeline(
-        cmdbuf, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        m_display_pipelines[BoolToUInt8(m_GPUSTAT.display_area_color_depth_24)][static_cast<u8>(interlaced)]);
+      vkCmdBindPipeline(cmdbuf, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        m_display_pipelines[BoolToUInt8(m_display_24bit)][static_cast<u8>(interlaced)]);
       vkCmdPushConstants(cmdbuf, m_single_sampler_pipeline_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(uniforms),
                          uniforms);
       vkCmdBindDescriptorSets(cmdbuf, VK_PIPELINE_BIND_POINT_GRAPHICS, m_single_sampler_pipeline_layout, 0, 1,
@@ -1022,16 +1022,14 @@ void GPU_HW_Vulkan::UpdateDisplay()
       m_vram_texture.TransitionToLayout(cmdbuf, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
       m_display_texture.TransitionToLayout(cmdbuf, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-      m_host_display->SetDisplayTexture(&m_display_texture, m_display_texture.GetWidth(), m_display_texture.GetHeight(),
-                                        0, 0, scaled_display_width, scaled_display_height);
+      display->SetDisplayTexture(&m_display_texture, m_display_texture.GetWidth(), m_display_texture.GetHeight(), 0, 0,
+                                 scaled_display_width, scaled_display_height);
 
       RestoreGraphicsAPIState();
     }
 
-    m_host_display->SetDisplayParameters(m_crtc_state.display_width, m_crtc_state.display_height,
-                                         m_crtc_state.display_origin_left, m_crtc_state.display_origin_top,
-                                         m_crtc_state.display_vram_width, m_crtc_state.display_vram_height,
-                                         m_crtc_state.display_aspect_ratio);
+    display->SetDisplayParameters(m_display_width, m_display_height, m_display_origin_left, m_display_origin_top,
+                                  m_display_width, m_display_height, m_display_aspect_ratio);
   }
 }
 
@@ -1080,19 +1078,19 @@ void GPU_HW_Vulkan::ReadVRAM(u32 x, u32 y, u32 width, u32 height)
   RestoreGraphicsAPIState();
 }
 
-void GPU_HW_Vulkan::FillVRAM(u32 x, u32 y, u32 width, u32 height, u32 color)
+void GPU_HW_Vulkan::FillVRAM(u32 x, u32 y, u32 width, u32 height, u32 color, GPUBackendCommandParameters params)
 {
   if ((x + width) > VRAM_WIDTH || (y + height) > VRAM_HEIGHT)
   {
     // CPU round trip if oversized for now.
     Log_WarningPrintf("Oversized VRAM fill (%u-%u, %u-%u), CPU round trip", x, x + width, y, y + height);
     ReadVRAM(0, 0, VRAM_WIDTH, VRAM_HEIGHT);
-    GPU::FillVRAM(x, y, width, height, color);
-    UpdateVRAM(0, 0, VRAM_WIDTH, VRAM_HEIGHT, m_vram_shadow.data());
+    SoftwareFillVRAM(x, y, width, height, color, params);
+    UpdateVRAM(0, 0, VRAM_WIDTH, VRAM_HEIGHT, m_vram_shadow.data(), params);
     return;
   }
 
-  GPU_HW::FillVRAM(x, y, width, height, color);
+  GPU_HW::FillVRAM(x, y, width, height, color, params);
 
   x *= m_resolution_scale;
   y *= m_resolution_scale;
@@ -1102,21 +1100,22 @@ void GPU_HW_Vulkan::FillVRAM(u32 x, u32 y, u32 width, u32 height, u32 color)
   BeginVRAMRenderPass();
 
   VkCommandBuffer cmdbuf = g_vulkan_context->GetCurrentCommandBuffer();
-  const VRAMFillUBOData uniforms = GetVRAMFillUBOData(x, y, width, height, color);
+  const VRAMFillUBOData uniforms = GetVRAMFillUBOData(x, y, width, height, color, params);
   vkCmdPushConstants(cmdbuf, m_no_samplers_pipeline_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(uniforms),
                      &uniforms);
   vkCmdBindPipeline(cmdbuf, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    m_vram_fill_pipelines[BoolToUInt8(IsInterlacedRenderingEnabled())]);
+                    m_vram_fill_pipelines[BoolToUInt8(params.interlaced_rendering)]);
   Vulkan::Util::SetViewportAndScissor(cmdbuf, x, y, width, height);
   vkCmdDraw(cmdbuf, 3, 1, 0, 0);
 
   RestoreGraphicsAPIState();
 }
 
-void GPU_HW_Vulkan::UpdateVRAM(u32 x, u32 y, u32 width, u32 height, const void* data)
+void GPU_HW_Vulkan::UpdateVRAM(u32 x, u32 y, u32 width, u32 height, const void* data,
+                               GPUBackendCommandParameters params)
 {
   const Common::Rectangle<u32> bounds = GetVRAMTransferBounds(x, y, width, height);
-  GPU_HW::UpdateVRAM(bounds.left, bounds.top, bounds.GetWidth(), bounds.GetHeight(), data);
+  GPU_HW::UpdateVRAM(bounds.left, bounds.top, bounds.GetWidth(), bounds.GetHeight(), data, params);
 
   const u32 data_size = width * height * sizeof(u16);
   const u32 alignment = std::max<u32>(sizeof(u16), static_cast<u32>(g_vulkan_context->GetTexelBufferAlignment()));
@@ -1140,16 +1139,16 @@ void GPU_HW_Vulkan::UpdateVRAM(u32 x, u32 y, u32 width, u32 height, const void* 
   BeginVRAMRenderPass();
 
   VkCommandBuffer cmdbuf = g_vulkan_context->GetCurrentCommandBuffer();
-  const VRAMWriteUBOData uniforms = GetVRAMWriteUBOData(x, y, width, height, start_index);
+  const VRAMWriteUBOData uniforms = GetVRAMWriteUBOData(x, y, width, height, start_index, params);
   vkCmdPushConstants(cmdbuf, m_vram_write_pipeline_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(uniforms),
                      &uniforms);
   vkCmdBindPipeline(cmdbuf, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    m_vram_write_pipelines[BoolToUInt8(m_GPUSTAT.check_mask_before_draw)]);
+                    m_vram_write_pipelines[BoolToUInt8(params.check_mask_before_draw)]);
   vkCmdBindDescriptorSets(cmdbuf, VK_PIPELINE_BIND_POINT_GRAPHICS, m_vram_write_pipeline_layout, 0, 1,
                           &m_vram_write_descriptor_set, 0, nullptr);
 
   // the viewport should already be set to the full vram, so just adjust the scissor
-  const Common::Rectangle<u32> scaled_bounds = bounds * m_resolution_scale;
+  const Common::Rectangle<u32> scaled_bounds(ScaleVRAMRect(bounds));
   Vulkan::Util::SetScissor(cmdbuf, scaled_bounds.left, scaled_bounds.top, scaled_bounds.GetWidth(),
                            scaled_bounds.GetHeight());
   vkCmdDraw(cmdbuf, 3, 1, 0, 0);
@@ -1157,9 +1156,10 @@ void GPU_HW_Vulkan::UpdateVRAM(u32 x, u32 y, u32 width, u32 height, const void* 
   RestoreGraphicsAPIState();
 }
 
-void GPU_HW_Vulkan::CopyVRAM(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32 height)
+void GPU_HW_Vulkan::CopyVRAM(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32 height,
+                             GPUBackendCommandParameters params)
 {
-  if (UseVRAMCopyShader(src_x, src_y, dst_x, dst_y, width, height))
+  if (UseVRAMCopyShader(src_x, src_y, dst_x, dst_y, width, height, params))
   {
     const Common::Rectangle<u32> src_bounds = GetVRAMTransferBounds(src_x, src_y, width, height);
     const Common::Rectangle<u32> dst_bounds = GetVRAMTransferBounds(dst_x, dst_y, width, height);
@@ -1167,14 +1167,14 @@ void GPU_HW_Vulkan::CopyVRAM(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 wid
       UpdateVRAMReadTexture();
     IncludeVRAMDityRectangle(dst_bounds);
 
-    const VRAMCopyUBOData uniforms(GetVRAMCopyUBOData(src_x, src_y, dst_x, dst_y, width, height));
-    const Common::Rectangle<u32> dst_bounds_scaled(dst_bounds * m_resolution_scale);
+    const VRAMCopyUBOData uniforms(GetVRAMCopyUBOData(src_x, src_y, dst_x, dst_y, width, height, params));
+    const Common::Rectangle<u32> dst_bounds_scaled(ScaleVRAMRect(dst_bounds));
 
     BeginVRAMRenderPass();
 
     VkCommandBuffer cmdbuf = g_vulkan_context->GetCurrentCommandBuffer();
     vkCmdBindPipeline(cmdbuf, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                      m_vram_copy_pipelines[BoolToUInt8(m_GPUSTAT.check_mask_before_draw)]);
+                      m_vram_copy_pipelines[BoolToUInt8(params.check_mask_before_draw)]);
     vkCmdBindDescriptorSets(cmdbuf, VK_PIPELINE_BIND_POINT_GRAPHICS, m_single_sampler_pipeline_layout, 0, 1,
                             &m_vram_copy_descriptor_set, 0, nullptr);
     vkCmdPushConstants(cmdbuf, m_single_sampler_pipeline_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(uniforms),
@@ -1184,13 +1184,13 @@ void GPU_HW_Vulkan::CopyVRAM(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 wid
     vkCmdDraw(cmdbuf, 3, 1, 0, 0);
     RestoreGraphicsAPIState();
 
-    if (m_GPUSTAT.check_mask_before_draw)
+    if (params.check_mask_before_draw)
       m_current_depth++;
 
     return;
   }
 
-  GPU_HW::CopyVRAM(src_x, src_y, dst_x, dst_y, width, height);
+  GPU_HW::CopyVRAM(src_x, src_y, dst_x, dst_y, width, height, params);
 
   src_x *= m_resolution_scale;
   src_y *= m_resolution_scale;
@@ -1224,7 +1224,7 @@ void GPU_HW_Vulkan::UpdateVRAMReadTexture()
   m_vram_texture.TransitionToLayout(cmdbuf, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
   m_vram_read_texture.TransitionToLayout(cmdbuf, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
-  const auto scaled_rect = m_vram_dirty_rect * m_resolution_scale;
+  const Common::Rectangle<u32> scaled_rect(ScaleVRAMRect(m_vram_dirty_rect));
   const VkImageCopy copy{{VK_IMAGE_ASPECT_COLOR_BIT, 0u, 0u, 1u},
                          {static_cast<s32>(scaled_rect.left), static_cast<s32>(scaled_rect.top), 0},
                          {VK_IMAGE_ASPECT_COLOR_BIT, 0u, 0u, 1u},
@@ -1261,9 +1261,4 @@ void GPU_HW_Vulkan::UpdateDepthBufferFromMaskBit()
   m_vram_texture.TransitionToLayout(cmdbuf, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
   RestoreGraphicsAPIState();
-}
-
-std::unique_ptr<GPU> GPU::CreateHardwareVulkanRenderer()
-{
-  return std::make_unique<GPU_HW_Vulkan>();
 }

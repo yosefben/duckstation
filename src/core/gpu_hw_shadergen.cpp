@@ -17,7 +17,7 @@ GPU_HW_ShaderGen::~GPU_HW_ShaderGen() = default;
 void GPU_HW_ShaderGen::WriteCommonFunctions(std::stringstream& ss)
 {
   ss << "CONSTANT uint RESOLUTION_SCALE = " << m_resolution_scale << "u;\n";
-  ss << "CONSTANT uint2 VRAM_SIZE = uint2(" << GPU::VRAM_WIDTH << ", " << GPU::VRAM_HEIGHT << ") * RESOLUTION_SCALE;\n";
+  ss << "CONSTANT uint2 VRAM_SIZE = uint2(" << VRAM_WIDTH << ", " << VRAM_HEIGHT << ") * RESOLUTION_SCALE;\n";
   ss << "CONSTANT float2 RCP_VRAM_SIZE = float2(1.0, 1.0) / float2(VRAM_SIZE);\n";
   ss << R"(
 
@@ -628,12 +628,11 @@ void FilteredSampleFromVRAM(uint4 texpage, float2 coords, float4 uv_limits,
 }
 
 std::string GPU_HW_ShaderGen::GenerateBatchFragmentShader(GPU_HW::BatchRenderMode transparency,
-                                                          GPU::TextureMode texture_mode, bool dithering,
-                                                          bool interlacing)
+                                                          GPUTextureMode texture_mode, bool dithering, bool interlacing)
 {
-  const GPU::TextureMode actual_texture_mode = texture_mode & ~GPU::TextureMode::RawTextureBit;
-  const bool raw_texture = (texture_mode & GPU::TextureMode::RawTextureBit) == GPU::TextureMode::RawTextureBit;
-  const bool textured = (texture_mode != GPU::TextureMode::Disabled);
+  const GPUTextureMode actual_texture_mode = texture_mode & ~GPUTextureMode::RawTextureBit;
+  const bool raw_texture = (texture_mode & GPUTextureMode::RawTextureBit) == GPUTextureMode::RawTextureBit;
+  const bool textured = (texture_mode != GPUTextureMode::Disabled);
   const bool use_dual_source =
     m_supports_dual_source_blend && ((transparency != GPU_HW::BatchRenderMode::TransparencyDisabled &&
                                       transparency != GPU_HW::BatchRenderMode::OnlyOpaque) ||
@@ -646,10 +645,9 @@ std::string GPU_HW_ShaderGen::GenerateBatchFragmentShader(GPU_HW::BatchRenderMod
   DefineMacro(ss, "TRANSPARENCY_ONLY_TRANSPARENT", transparency == GPU_HW::BatchRenderMode::OnlyTransparent);
   DefineMacro(ss, "TEXTURED", textured);
   DefineMacro(ss, "PALETTE",
-              actual_texture_mode == GPU::TextureMode::Palette4Bit ||
-                actual_texture_mode == GPU::TextureMode::Palette8Bit);
-  DefineMacro(ss, "PALETTE_4_BIT", actual_texture_mode == GPU::TextureMode::Palette4Bit);
-  DefineMacro(ss, "PALETTE_8_BIT", actual_texture_mode == GPU::TextureMode::Palette8Bit);
+              actual_texture_mode == GPUTextureMode::Palette4Bit || actual_texture_mode == GPUTextureMode::Palette8Bit);
+  DefineMacro(ss, "PALETTE_4_BIT", actual_texture_mode == GPUTextureMode::Palette4Bit);
+  DefineMacro(ss, "PALETTE_8_BIT", actual_texture_mode == GPUTextureMode::Palette8Bit);
   DefineMacro(ss, "RAW_TEXTURE", raw_texture);
   DefineMacro(ss, "DITHERING", dithering);
   DefineMacro(ss, "DITHERING_SCALED", m_scaled_dithering);
@@ -671,7 +669,7 @@ std::string GPU_HW_ShaderGen::GenerateBatchFragmentShader(GPU_HW::BatchRenderMod
   {
     if (i > 0)
       ss << ", ";
-    ss << GPU::DITHER_MATRIX[i / 4][i % 4];
+    ss << DITHER_MATRIX[i / 4][i % 4];
   }
   if (m_glsl)
     ss << " );\n";
@@ -967,14 +965,13 @@ std::string GPU_HW_ShaderGen::GenerateInterlacedFillFragmentShader()
   return ss.str();
 }
 
-std::string GPU_HW_ShaderGen::GenerateDisplayFragmentShader(bool depth_24bit,
-                                                            GPU_HW::InterlacedRenderMode interlace_mode)
+std::string GPU_HW_ShaderGen::GenerateDisplayFragmentShader(bool depth_24bit, GPUInterlacedDisplayMode interlace_mode)
 {
   std::stringstream ss;
   WriteHeader(ss);
   DefineMacro(ss, "DEPTH_24BIT", depth_24bit);
-  DefineMacro(ss, "INTERLACED", interlace_mode != GPU_HW::InterlacedRenderMode::None);
-  DefineMacro(ss, "INTERLEAVED", interlace_mode == GPU_HW::InterlacedRenderMode::InterleavedFields);
+  DefineMacro(ss, "INTERLACED", interlace_mode != GPUInterlacedDisplayMode::None);
+  DefineMacro(ss, "INTERLEAVED", interlace_mode == GPUInterlacedDisplayMode::InterleavedFields);
 
   WriteCommonFunctions(ss);
   DeclareUniformBuffer(ss, {"uint2 u_vram_offset", "uint u_crop_left", "uint u_field_offset"}, true);

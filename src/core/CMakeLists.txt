@@ -28,6 +28,8 @@ add_library(core
     dma.h
     gpu.cpp
     gpu.h
+    gpu_backend.cpp
+    gpu_backend.h
     gpu_commands.cpp
     gpu_hw.cpp
     gpu_hw.h

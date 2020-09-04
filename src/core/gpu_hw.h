@@ -1,6 +1,6 @@
 #pragma once
 #include "common/heap_array.h"
-#include "gpu.h"
+#include "gpu_backend.h"
 #include "host_display.h"
 #include <sstream>
 #include <string>
@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-class GPU_HW : public GPU
+class GPU_HW : public GPUBackend
 {
 public:
   enum class BatchRenderMode : u8
@@ -19,22 +19,14 @@ public:
     OnlyTransparent
   };
 
-  enum class InterlacedRenderMode : u8
-  {
-    None,
-    InterleavedFields,
-    SeparateFields
-  };
-
   GPU_HW();
   virtual ~GPU_HW();
 
   virtual bool IsHardwareRenderer() const override;
 
-  virtual bool Initialize(HostDisplay* host_display) override;
+  virtual bool Initialize() override;
   virtual void Reset() override;
-  virtual bool DoState(StateWrapper& sw) override;
-  
+
   void UpdateResolutionScale() override final;
   std::tuple<u32, u32> GetEffectiveDisplayResolution() override final;
 
@@ -94,8 +86,8 @@ protected:
 
   struct BatchConfig
   {
-    TextureMode texture_mode;
-    TransparencyMode transparency_mode;
+    GPUTextureMode texture_mode;
+    GPUTransparencyMode transparency_mode;
     bool dithering;
     bool interlacing;
     bool set_mask_while_drawing;
@@ -105,15 +97,15 @@ protected:
     // on a per-pixel basis, and the opaque pixels shouldn't be blended at all.
     bool NeedsTwoPassRendering() const
     {
-      return transparency_mode == GPU::TransparencyMode::BackgroundMinusForeground &&
-             texture_mode != TextureMode::Disabled;
+      return transparency_mode == GPUTransparencyMode::BackgroundMinusForeground &&
+             texture_mode != GPUTextureMode::Disabled;
     }
 
     // Returns the render mode for this batch.
     BatchRenderMode GetRenderMode() const
     {
-      return transparency_mode == TransparencyMode::Disabled ? BatchRenderMode::TransparencyDisabled :
-                                                               BatchRenderMode::TransparentAndOpaque;
+      return transparency_mode == GPUTransparencyMode::Disabled ? BatchRenderMode::TransparencyDisabled :
+                                                                  BatchRenderMode::TransparentAndOpaque;
     }
   };
 
@@ -179,7 +171,6 @@ protected:
 
   virtual void UpdateVRAMReadTexture();
   virtual void UpdateDepthBufferFromMaskBit() = 0;
-  virtual void SetScissorFromDrawingArea() = 0;
   virtual void MapBatchVertexPointer(u32 required_vertices) = 0;
   virtual void UnmapBatchVertexPointer(u32 used_vertices) = 0;
   virtual void UploadUniformBuffer(const void* uniforms, u32 uniforms_size) = 0;
@@ -187,12 +178,9 @@ protected:
 
   u32 CalculateResolutionScale() const;
 
-  void SetFullVRAMDirtyRectangle()
-  {
-    m_vram_dirty_rect.Set(0, 0, VRAM_WIDTH, VRAM_HEIGHT);
-    m_draw_mode.SetTexturePageChanged();
-  }
+  void SetFullVRAMDirtyRectangle() { m_vram_dirty_rect.Set(0, 0, VRAM_WIDTH, VRAM_HEIGHT); }
   void ClearVRAMDirtyRectangle() { m_vram_dirty_rect.SetInvalid(); }
+  void IncludeVRAMDityRectangle(const Common::Rectangle<u16>& rect);
   void IncludeVRAMDityRectangle(const Common::Rectangle<u32>& rect);
 
   bool IsFlushed() const { return m_batch_current_vertex_ptr == m_batch_start_vertex_ptr; }
@@ -200,7 +188,7 @@ protected:
   u32 GetBatchVertexSpace() const { return static_cast<u32>(m_batch_end_vertex_ptr - m_batch_current_vertex_ptr); }
   u32 GetBatchVertexCount() const { return static_cast<u32>(m_batch_current_vertex_ptr - m_batch_start_vertex_ptr); }
   void EnsureVertexBufferSpace(u32 required_vertices);
-  void EnsureVertexBufferSpaceForCurrentCommand();
+  void EnsureVertexBufferSpace(const GPUBackendDrawCommand* cmd);
   void ResetBatchVertexDepth();
 
   /// Returns the value to be written to the depth buffer for the current operation for mask bit emulation.
@@ -209,43 +197,41 @@ protected:
     return 1.0f - (static_cast<float>(m_current_depth) / 65535.0f);
   }
 
-  /// Returns the interlaced mode to use when scanning out/displaying.
-  ALWAYS_INLINE InterlacedRenderMode GetInterlacedRenderMode() const
-  {
-    if (IsInterlacedDisplayEnabled())
-    {
-      return m_GPUSTAT.vertical_resolution ? InterlacedRenderMode::InterleavedFields :
-                                             InterlacedRenderMode::SeparateFields;
-    }
-    else
-    {
-      return InterlacedRenderMode::None;
-    }
-  }
-
-  void FillVRAM(u32 x, u32 y, u32 width, u32 height, u32 color) override;
-  void UpdateVRAM(u32 x, u32 y, u32 width, u32 height, const void* data) override;
-  void CopyVRAM(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32 height) override;
-  void DispatchRenderCommand() override;
+  void FillVRAM(u32 x, u32 y, u32 width, u32 height, u32 color, GPUBackendCommandParameters params) override;
+  void UpdateVRAM(u32 x, u32 y, u32 width, u32 height, const void* data, GPUBackendCommandParameters params) override;
+  void CopyVRAM(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32 height,
+                GPUBackendCommandParameters params) override;
+  void DrawPolygon(const GPUBackendDrawPolygonCommand* cmd) override;
+  void DrawLine(const GPUBackendDrawLineCommand* cmd) override;
+  void DrawRectangle(const GPUBackendDrawRectangleCommand* cmd) override;
   void FlushRender() override;
   void DrawRendererStats(bool is_idle_frame) override;
 
   void CalcScissorRect(int* left, int* top, int* right, int* bottom);
 
-  std::tuple<s32, s32> ScaleVRAMCoordinates(s32 x, s32 y) const
+  ALWAYS_INLINE std::tuple<s32, s32> ScaleVRAMCoordinates(s32 x, s32 y) const
   {
     return std::make_tuple(x * s32(m_resolution_scale), y * s32(m_resolution_scale));
+  }
+
+  ALWAYS_INLINE Common::Rectangle<u32> ScaleVRAMRect(const Common::Rectangle<u32>& rect)
+  {
+    return rect * m_resolution_scale;
   }
 
   /// Computes the area affected by a VRAM transfer, including wrap-around of X.
   Common::Rectangle<u32> GetVRAMTransferBounds(u32 x, u32 y, u32 width, u32 height) const;
 
   /// Returns true if the VRAM copy shader should be used (oversized copies, masking).
-  bool UseVRAMCopyShader(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32 height) const;
+  bool UseVRAMCopyShader(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32 height,
+                         GPUBackendCommandParameters params) const;
 
-  VRAMFillUBOData GetVRAMFillUBOData(u32 x, u32 y, u32 width, u32 height, u32 color) const;
-  VRAMWriteUBOData GetVRAMWriteUBOData(u32 x, u32 y, u32 width, u32 height, u32 buffer_offset) const;
-  VRAMCopyUBOData GetVRAMCopyUBOData(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32 height) const;
+  VRAMFillUBOData GetVRAMFillUBOData(u32 x, u32 y, u32 width, u32 height, u32 color,
+                                     GPUBackendCommandParameters params) const;
+  VRAMWriteUBOData GetVRAMWriteUBOData(u32 x, u32 y, u32 width, u32 height, u32 buffer_offset,
+                                       GPUBackendCommandParameters params) const;
+  VRAMCopyUBOData GetVRAMCopyUBOData(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32 height,
+                                     GPUBackendCommandParameters params) const;
 
   /// Expands a line into two triangles.
   void DrawLine(float x0, float y0, u32 col0, float x1, float y1, u32 col1, float depth);
@@ -256,6 +242,8 @@ protected:
   /// Computes polygon U/V boundaries.
   static void ComputePolygonUVLimits(BatchVertex* vertices, u32 num_vertices);
   static bool AreUVLimitsNeeded();
+
+  void SetupDraw(const GPUBackendDrawCommand* cmd);
 
   HeapArray<u16, VRAM_WIDTH * VRAM_HEIGHT> m_vram_shadow;
 
@@ -280,12 +268,16 @@ protected:
   // Bounding box of VRAM area that the GPU has drawn into.
   Common::Rectangle<u32> m_vram_dirty_rect;
 
+  GPUDrawModeReg m_last_texture_page_bits{};
+  GPUTextureWindowReg m_last_texture_window_reg{};
+
   // Statistics
   RendererStats m_renderer_stats = {};
   RendererStats m_last_renderer_stats = {};
 
   // Changed state
   bool m_batch_ubo_dirty = true;
+  bool m_drawing_area_changed = false;
 
 private:
   enum : u32
@@ -293,8 +285,6 @@ private:
     MIN_BATCH_VERTEX_COUNT = 6,
     MAX_BATCH_VERTEX_COUNT = VERTEX_BUFFER_SIZE / sizeof(BatchVertex)
   };
-
-  void LoadVertices();
 
   ALWAYS_INLINE void AddVertex(const BatchVertex& v)
   {

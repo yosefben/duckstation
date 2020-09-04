@@ -579,14 +579,14 @@ ALWAYS_INLINE static TickCount DoGPUAccess(u32 offset, u32& value)
 {
   if constexpr (type == MemoryAccessType::Read)
   {
-    value = g_gpu->ReadRegister(offset);
+    value = g_gpu.ReadRegister(offset);
     FixupUnalignedWordAccessW32(offset, value);
     return 2;
   }
   else
   {
     FixupUnalignedWordAccessW32(offset, value);
-    g_gpu->WriteRegister(offset, value);
+    g_gpu.WriteRegister(offset, value);
     return 0;
   }
 }

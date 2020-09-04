@@ -66,7 +66,7 @@ struct State
   bool branch_was_taken = false;
   bool exception_raised = false;
   bool interrupt_delay = false;
-  bool frame_done = false;
+  bool frame_done = true;
 
   // load delays
   Reg load_delay_reg = Reg::count;

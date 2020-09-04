@@ -14,25 +14,13 @@
 #endif
 Log_SetChannel(GPU_HW);
 
-template<typename T>
-ALWAYS_INLINE static constexpr std::tuple<T, T> MinMax(T v1, T v2)
-{
-  if (v1 > v2)
-    return std::tie(v2, v1);
-  else
-    return std::tie(v1, v2);
-}
-
 ALWAYS_INLINE static bool ShouldUseUVLimits()
 {
   // We only need UV limits if PGXP is enabled, or texture filtering is enabled.
   return g_settings.gpu_pgxp_enable || g_settings.gpu_texture_filter != GPUTextureFilter::Nearest;
 }
 
-GPU_HW::GPU_HW() : GPU()
-{
-  m_vram_ptr = m_vram_shadow.data();
-}
+GPU_HW::GPU_HW() : GPUBackend() {}
 
 GPU_HW::~GPU_HW() = default;
 
@@ -41,13 +29,14 @@ bool GPU_HW::IsHardwareRenderer() const
   return true;
 }
 
-bool GPU_HW::Initialize(HostDisplay* host_display)
+bool GPU_HW::Initialize()
 {
-  if (!GPU::Initialize(host_display))
+  if (!GPUBackend::Initialize())
     return false;
 
+  m_vram_ptr = m_vram_shadow.data();
   m_resolution_scale = CalculateResolutionScale();
-  m_render_api = host_display->GetRenderAPI();
+  m_render_api = g_host_interface->GetDisplay()->GetRenderAPI();
   m_true_color = g_settings.gpu_true_color;
   m_scaled_dithering = g_settings.gpu_scaled_dithering;
   m_texture_filtering = g_settings.gpu_texture_filter;
@@ -58,7 +47,7 @@ bool GPU_HW::Initialize(HostDisplay* host_display)
 
 void GPU_HW::Reset()
 {
-  GPU::Reset();
+  GPUBackend::Reset();
 
   m_batch_current_vertex_ptr = m_batch_start_vertex_ptr;
 
@@ -70,22 +59,6 @@ void GPU_HW::Reset()
   m_current_depth = 1;
 
   SetFullVRAMDirtyRectangle();
-}
-
-bool GPU_HW::DoState(StateWrapper& sw)
-{
-  if (!GPU::DoState(sw))
-    return false;
-
-  // invalidate the whole VRAM read texture when loading state
-  if (sw.IsReading())
-  {
-    m_batch_current_vertex_ptr = m_batch_start_vertex_ptr;
-    SetFullVRAMDirtyRectangle();
-    ResetBatchVertexDepth();
-  }
-
-  return true;
 }
 
 void GPU_HW::UpdateHWSettings(bool* framebuffer_changed, bool* shaders_changed)
@@ -100,10 +73,12 @@ void GPU_HW::UpdateHWSettings(bool* framebuffer_changed, bool* shaders_changed)
 
   if (m_resolution_scale != resolution_scale)
   {
+#if FIXME
     g_host_interface->AddFormattedOSDMessage(10.0f, "Resolution scale set to %ux (display %ux%u, VRAM %ux%u)",
                                              resolution_scale, m_crtc_state.display_vram_width * resolution_scale,
                                              resolution_scale * m_crtc_state.display_vram_height,
                                              VRAM_WIDTH * resolution_scale, VRAM_HEIGHT * resolution_scale);
+#endif
   }
 
   m_resolution_scale = resolution_scale;
@@ -119,6 +94,7 @@ u32 GPU_HW::CalculateResolutionScale() const
   if (g_settings.gpu_resolution_scale != 0)
     return std::clamp<u32>(g_settings.gpu_resolution_scale, 1, m_max_resolution_scale);
 
+#if FIXME
   // auto scaling
   const s32 height = (m_crtc_state.display_height != 0) ? static_cast<s32>(m_crtc_state.display_height) : 480;
   const s32 preferred_scale =
@@ -126,11 +102,14 @@ u32 GPU_HW::CalculateResolutionScale() const
   Log_InfoPrintf("Height = %d, preferred scale = %d", height, preferred_scale);
 
   return static_cast<u32>(std::clamp<s32>(preferred_scale, 1, m_max_resolution_scale));
+#else
+  return 1;
+#endif
 }
 
 void GPU_HW::UpdateResolutionScale()
 {
-  GPU::UpdateResolutionScale();
+  GPUBackend::UpdateResolutionScale();
 
   if (CalculateResolutionScale() != m_resolution_scale)
     UpdateSettings();
@@ -138,8 +117,7 @@ void GPU_HW::UpdateResolutionScale()
 
 std::tuple<u32, u32> GPU_HW::GetEffectiveDisplayResolution()
 {
-  return std::make_tuple(m_crtc_state.display_vram_width * m_resolution_scale,
-                         m_resolution_scale * m_crtc_state.display_vram_height);
+  return std::make_tuple(m_display_vram_width * m_resolution_scale, m_resolution_scale * m_display_vram_height);
 }
 
 void GPU_HW::PrintSettingsToLog()
@@ -358,334 +336,119 @@ void GPU_HW::DrawLine(float x0, float y0, u32 col0, float x1, float y1, u32 col1
   AddVertex(output[1]);
 }
 
-void GPU_HW::LoadVertices()
+void GPU_HW::DrawPolygon(const GPUBackendDrawPolygonCommand* cmd)
 {
-  if (m_GPUSTAT.check_mask_before_draw)
+  SetupDraw(cmd);
+  if (cmd->params.check_mask_before_draw)
     m_current_depth++;
 
-  const RenderCommand rc{m_render_command.bits};
-  const u32 texpage = ZeroExtend32(m_draw_mode.mode_reg.bits) | (ZeroExtend32(m_draw_mode.palette_reg) << 16);
+  const GPURenderCommand rc{cmd->rc.bits};
+  const u32 texpage = ZeroExtend32(cmd->draw_mode.bits) | (ZeroExtend32(cmd->palette.bits) << 16);
   const float depth = GetCurrentNormalizedVertexDepth();
 
-  switch (rc.primitive)
+  DebugAssert(GetBatchVertexSpace() >= (rc.quad_polygon ? 6u : 3u));
+
+  const u32 first_color = rc.color_for_first_vertex;
+  const bool shaded = rc.shading_enable;
+  const bool textured = rc.texture_enable;
+  const bool pgxp = g_settings.gpu_pgxp_enable;
+
+  std::array<BatchVertex, 4> vertices;
+  for (u32 i = 0; i < cmd->num_vertices; i++)
   {
-    case Primitive::Polygon:
-    {
-      DebugAssert(GetBatchVertexSpace() >= (rc.quad_polygon ? 6u : 3u));
-
-      const u32 first_color = rc.color_for_first_vertex;
-      const bool shaded = rc.shading_enable;
-      const bool textured = rc.texture_enable;
-      const bool pgxp = g_settings.gpu_pgxp_enable;
-
-      const u32 num_vertices = rc.quad_polygon ? 4 : 3;
-      std::array<BatchVertex, 4> vertices;
-      std::array<std::array<s32, 2>, 4> native_vertex_positions;
-      bool valid_w = g_settings.gpu_pgxp_texture_correction;
-      for (u32 i = 0; i < num_vertices; i++)
-      {
-        const u32 color = (shaded && i > 0) ? (FifoPop() & UINT32_C(0x00FFFFFF)) : first_color;
-        const u64 maddr_and_pos = m_fifo.Pop();
-        const VertexPosition vp{Truncate32(maddr_and_pos)};
-        const u16 texcoord = textured ? Truncate16(FifoPop()) : 0;
-        const s32 native_x = m_drawing_offset.x + vp.x;
-        const s32 native_y = m_drawing_offset.y + vp.y;
-        native_vertex_positions[i][0] = native_x;
-        native_vertex_positions[i][1] = native_y;
-        vertices[i].Set(static_cast<float>(native_x), static_cast<float>(native_y), depth, 1.0f, color, texpage,
-                        texcoord, 0xFFFF0000u);
-
-        if (pgxp)
-        {
-          valid_w &=
-            PGXP::GetPreciseVertex(Truncate32(maddr_and_pos >> 32), vp.bits, native_x, native_y, m_drawing_offset.x,
-                                   m_drawing_offset.y, &vertices[i].x, &vertices[i].y, &vertices[i].w);
-        }
-      }
-      if (!valid_w)
-      {
-        for (BatchVertex& v : vertices)
-          v.w = 1.0f;
-      }
-
-      if (rc.quad_polygon && m_resolution_scale > 1)
-        HandleFlippedQuadTextureCoordinates(vertices.data());
-
-      if (m_using_uv_limits && textured)
-        ComputePolygonUVLimits(vertices.data(), num_vertices);
-
-      if (!IsDrawingAreaIsValid())
-        return;
-
-      // Cull polygons which are too large.
-      const auto [min_x_12, max_x_12] = MinMax(native_vertex_positions[1][0], native_vertex_positions[2][0]);
-      const auto [min_y_12, max_y_12] = MinMax(native_vertex_positions[1][1], native_vertex_positions[2][1]);
-      const s32 min_x = std::min(min_x_12, native_vertex_positions[0][0]);
-      const s32 max_x = std::max(max_x_12, native_vertex_positions[0][0]);
-      const s32 min_y = std::min(min_y_12, native_vertex_positions[0][1]);
-      const s32 max_y = std::max(max_y_12, native_vertex_positions[0][1]);
-
-      if ((max_x - min_x) >= MAX_PRIMITIVE_WIDTH || (max_y - min_y) >= MAX_PRIMITIVE_HEIGHT)
-      {
-        Log_DebugPrintf("Culling too-large polygon: %d,%d %d,%d %d,%d", native_vertex_positions[0][0],
-                        native_vertex_positions[0][1], native_vertex_positions[1][0], native_vertex_positions[1][1],
-                        native_vertex_positions[2][0], native_vertex_positions[2][1]);
-      }
-      else
-      {
-        const u32 clip_left = static_cast<u32>(std::clamp<s32>(min_x, m_drawing_area.left, m_drawing_area.right));
-        const u32 clip_right = static_cast<u32>(std::clamp<s32>(max_x, m_drawing_area.left, m_drawing_area.right)) + 1u;
-        const u32 clip_top = static_cast<u32>(std::clamp<s32>(min_y, m_drawing_area.top, m_drawing_area.bottom));
-        const u32 clip_bottom =
-          static_cast<u32>(std::clamp<s32>(max_y, m_drawing_area.top, m_drawing_area.bottom)) + 1u;
-
-        m_vram_dirty_rect.Include(clip_left, clip_right, clip_top, clip_bottom);
-        AddDrawTriangleTicks(clip_right - clip_left, clip_bottom - clip_top, rc.shading_enable, rc.texture_enable,
-                             rc.transparency_enable);
-
-        std::memcpy(m_batch_current_vertex_ptr, vertices.data(), sizeof(BatchVertex) * 3);
-        m_batch_current_vertex_ptr += 3;
-      }
-
-      // quads
-      if (rc.quad_polygon)
-      {
-        const s32 min_x_123 = std::min(min_x_12, native_vertex_positions[3][0]);
-        const s32 max_x_123 = std::max(max_x_12, native_vertex_positions[3][0]);
-        const s32 min_y_123 = std::min(min_y_12, native_vertex_positions[3][1]);
-        const s32 max_y_123 = std::max(max_y_12, native_vertex_positions[3][1]);
-
-        // Cull polygons which are too large.
-        if ((max_x_123 - min_x_123) >= MAX_PRIMITIVE_WIDTH || (max_y_123 - min_y_123) >= MAX_PRIMITIVE_HEIGHT)
-        {
-          Log_DebugPrintf("Culling too-large polygon (quad second half): %d,%d %d,%d %d,%d",
-                          native_vertex_positions[2][0], native_vertex_positions[2][1], native_vertex_positions[1][0],
-                          native_vertex_positions[1][1], native_vertex_positions[0][0], native_vertex_positions[0][1]);
-        }
-        else
-        {
-          const u32 clip_left = static_cast<u32>(std::clamp<s32>(min_x_123, m_drawing_area.left, m_drawing_area.right));
-          const u32 clip_right =
-            static_cast<u32>(std::clamp<s32>(max_x_123, m_drawing_area.left, m_drawing_area.right)) + 1u;
-          const u32 clip_top = static_cast<u32>(std::clamp<s32>(min_y_123, m_drawing_area.top, m_drawing_area.bottom));
-          const u32 clip_bottom =
-            static_cast<u32>(std::clamp<s32>(max_y_123, m_drawing_area.top, m_drawing_area.bottom)) + 1u;
-
-          m_vram_dirty_rect.Include(clip_left, clip_right, clip_top, clip_bottom);
-          AddDrawTriangleTicks(clip_right - clip_left, clip_bottom - clip_top, rc.shading_enable, rc.texture_enable,
-                               rc.transparency_enable);
-
-          AddVertex(vertices[2]);
-          AddVertex(vertices[1]);
-          AddVertex(vertices[3]);
-        }
-      }
-    }
-    break;
-
-    case Primitive::Rectangle:
-    {
-      const u32 color = rc.color_for_first_vertex;
-      const VertexPosition vp{FifoPop()};
-      const s32 pos_x = TruncateVertexPosition(m_drawing_offset.x + vp.x);
-      const s32 pos_y = TruncateVertexPosition(m_drawing_offset.y + vp.y);
-
-      const auto [texcoord_x, texcoord_y] = UnpackTexcoord(rc.texture_enable ? Truncate16(FifoPop()) : 0);
-      u16 orig_tex_left = ZeroExtend16(texcoord_x);
-      u16 orig_tex_top = ZeroExtend16(texcoord_y);
-      s32 rectangle_width;
-      s32 rectangle_height;
-      switch (rc.rectangle_size)
-      {
-        case DrawRectangleSize::R1x1:
-          rectangle_width = 1;
-          rectangle_height = 1;
-          break;
-        case DrawRectangleSize::R8x8:
-          rectangle_width = 8;
-          rectangle_height = 8;
-          break;
-        case DrawRectangleSize::R16x16:
-          rectangle_width = 16;
-          rectangle_height = 16;
-          break;
-        default:
-        {
-          const u32 width_and_height = FifoPop();
-          rectangle_width = static_cast<s32>(width_and_height & VRAM_WIDTH_MASK);
-          rectangle_height = static_cast<s32>((width_and_height >> 16) & VRAM_HEIGHT_MASK);
-
-          if (rectangle_width >= MAX_PRIMITIVE_WIDTH || rectangle_height >= MAX_PRIMITIVE_HEIGHT)
-          {
-            Log_DebugPrintf("Culling too-large rectangle: %d,%d %dx%d", pos_x, pos_y, rectangle_width,
-                            rectangle_height);
-            return;
-          }
-        }
-        break;
-      }
-
-      // we can split the rectangle up into potentially 8 quads
-      DebugAssert(GetBatchVertexSpace() >= MAX_VERTICES_FOR_RECTANGLE);
-
-      if (!IsDrawingAreaIsValid())
-        return;
-
-      // Split the rectangle into multiple quads if it's greater than 256x256, as the texture page should repeat.
-      u16 tex_top = orig_tex_top;
-      for (s32 y_offset = 0; y_offset < rectangle_height;)
-      {
-        const s32 quad_height = std::min<s32>(rectangle_height - y_offset, TEXTURE_PAGE_WIDTH - tex_top);
-        const float quad_start_y = static_cast<float>(pos_y + y_offset);
-        const float quad_end_y = quad_start_y + static_cast<float>(quad_height);
-        const u16 tex_bottom = tex_top + static_cast<u16>(quad_height);
-
-        u16 tex_left = orig_tex_left;
-        for (s32 x_offset = 0; x_offset < rectangle_width;)
-        {
-          const s32 quad_width = std::min<s32>(rectangle_width - x_offset, TEXTURE_PAGE_HEIGHT - tex_left);
-          const float quad_start_x = static_cast<float>(pos_x + x_offset);
-          const float quad_end_x = quad_start_x + static_cast<float>(quad_width);
-          const u16 tex_right = tex_left + static_cast<u16>(quad_width);
-          const u32 uv_limits = BatchVertex::PackUVLimits(tex_left, tex_right - 1, tex_top, tex_bottom - 1);
-
-          AddNewVertex(quad_start_x, quad_start_y, depth, 1.0f, color, texpage, tex_left, tex_top, uv_limits);
-          AddNewVertex(quad_end_x, quad_start_y, depth, 1.0f, color, texpage, tex_right, tex_top, uv_limits);
-          AddNewVertex(quad_start_x, quad_end_y, depth, 1.0f, color, texpage, tex_left, tex_bottom, uv_limits);
-
-          AddNewVertex(quad_start_x, quad_end_y, depth, 1.0f, color, texpage, tex_left, tex_bottom, uv_limits);
-          AddNewVertex(quad_end_x, quad_start_y, depth, 1.0f, color, texpage, tex_right, tex_top, uv_limits);
-          AddNewVertex(quad_end_x, quad_end_y, depth, 1.0f, color, texpage, tex_right, tex_bottom, uv_limits);
-
-          x_offset += quad_width;
-          tex_left = 0;
-        }
-
-        y_offset += quad_height;
-        tex_top = 0;
-      }
-
-      const u32 clip_left = static_cast<u32>(std::clamp<s32>(pos_x, m_drawing_area.left, m_drawing_area.right));
-      const u32 clip_right =
-        static_cast<u32>(std::clamp<s32>(pos_x + rectangle_width, m_drawing_area.left, m_drawing_area.right)) + 1u;
-      const u32 clip_top = static_cast<u32>(std::clamp<s32>(pos_y, m_drawing_area.top, m_drawing_area.bottom));
-      const u32 clip_bottom =
-        static_cast<u32>(std::clamp<s32>(pos_y + rectangle_height, m_drawing_area.top, m_drawing_area.bottom)) + 1u;
-
-      m_vram_dirty_rect.Include(clip_left, clip_right, clip_top, clip_bottom);
-      AddDrawRectangleTicks(clip_right - clip_left, clip_bottom - clip_top, rc.texture_enable, rc.transparency_enable);
-    }
-    break;
-
-    case Primitive::Line:
-    {
-      if (!rc.polyline)
-      {
-        DebugAssert(GetBatchVertexSpace() >= 2);
-
-        u32 start_color, end_color;
-        VertexPosition start_pos, end_pos;
-        if (rc.shading_enable)
-        {
-          start_color = rc.color_for_first_vertex;
-          start_pos.bits = FifoPop();
-          end_color = FifoPop() & UINT32_C(0x00FFFFFF);
-          end_pos.bits = FifoPop();
-        }
-        else
-        {
-          start_color = end_color = rc.color_for_first_vertex;
-          start_pos.bits = FifoPop();
-          end_pos.bits = FifoPop();
-        }
-
-        if (!IsDrawingAreaIsValid())
-          return;
-
-        s32 start_x = start_pos.x + m_drawing_offset.x;
-        s32 start_y = start_pos.y + m_drawing_offset.y;
-        s32 end_x = end_pos.x + m_drawing_offset.x;
-        s32 end_y = end_pos.y + m_drawing_offset.y;
-        const auto [min_x, max_x] = MinMax(start_x, end_x);
-        const auto [min_y, max_y] = MinMax(start_y, end_y);
-        if ((max_x - min_x) >= MAX_PRIMITIVE_WIDTH || (max_y - min_y) >= MAX_PRIMITIVE_HEIGHT)
-        {
-          Log_DebugPrintf("Culling too-large line: %d,%d - %d,%d", start_x, start_y, end_x, end_y);
-          return;
-        }
-
-        const u32 clip_left = static_cast<u32>(std::clamp<s32>(min_x, m_drawing_area.left, m_drawing_area.left));
-        const u32 clip_right = static_cast<u32>(std::clamp<s32>(max_x, m_drawing_area.left, m_drawing_area.right)) + 1u;
-        const u32 clip_top = static_cast<u32>(std::clamp<s32>(min_y, m_drawing_area.top, m_drawing_area.bottom));
-        const u32 clip_bottom =
-          static_cast<u32>(std::clamp<s32>(max_y, m_drawing_area.top, m_drawing_area.bottom)) + 1u;
-
-        m_vram_dirty_rect.Include(clip_left, clip_right, clip_top, clip_bottom);
-        AddDrawLineTicks(clip_right - clip_left, clip_bottom - clip_top, rc.shading_enable);
-
-        // TODO: Should we do a PGXP lookup here? Most lines are 2D.
-        DrawLine(static_cast<float>(start_x), static_cast<float>(start_y), start_color, static_cast<float>(end_x),
-                 static_cast<float>(end_y), end_color, depth);
-      }
-      else
-      {
-        // Multiply by two because we don't use line strips.
-        const u32 num_vertices = GetPolyLineVertexCount();
-        DebugAssert(GetBatchVertexSpace() >= (num_vertices * 2));
-
-        if (!IsDrawingAreaIsValid())
-          return;
-
-        const bool shaded = rc.shading_enable;
-
-        u32 buffer_pos = 0;
-        const VertexPosition start_vp{m_blit_buffer[buffer_pos++]};
-        s32 start_x = start_vp.x + m_drawing_offset.x;
-        s32 start_y = start_vp.y + m_drawing_offset.y;
-        u32 start_color = rc.color_for_first_vertex;
-
-        for (u32 i = 1; i < num_vertices; i++)
-        {
-          const u32 end_color = shaded ? (m_blit_buffer[buffer_pos++] & UINT32_C(0x00FFFFFF)) : start_color;
-          const VertexPosition vp{m_blit_buffer[buffer_pos++]};
-          const s32 end_x = m_drawing_offset.x + vp.x;
-          const s32 end_y = m_drawing_offset.y + vp.y;
-
-          const auto [min_x, max_x] = MinMax(start_x, end_x);
-          const auto [min_y, max_y] = MinMax(start_y, end_y);
-          if ((max_x - min_x) >= MAX_PRIMITIVE_WIDTH || (max_y - min_y) >= MAX_PRIMITIVE_HEIGHT)
-          {
-            Log_DebugPrintf("Culling too-large line: %d,%d - %d,%d", start_x, start_y, end_x, end_y);
-          }
-          else
-          {
-            const u32 clip_left = static_cast<u32>(std::clamp<s32>(min_x, m_drawing_area.left, m_drawing_area.left));
-            const u32 clip_right =
-              static_cast<u32>(std::clamp<s32>(max_x, m_drawing_area.left, m_drawing_area.right)) + 1u;
-            const u32 clip_top = static_cast<u32>(std::clamp<s32>(min_y, m_drawing_area.top, m_drawing_area.bottom));
-            const u32 clip_bottom =
-              static_cast<u32>(std::clamp<s32>(max_y, m_drawing_area.top, m_drawing_area.bottom)) + 1u;
-
-            m_vram_dirty_rect.Include(clip_left, clip_right, clip_top, clip_bottom);
-            AddDrawLineTicks(clip_right - clip_left, clip_bottom - clip_top, rc.shading_enable);
-
-            // TODO: Should we do a PGXP lookup here? Most lines are 2D.
-            DrawLine(static_cast<float>(start_x), static_cast<float>(start_y), start_color, static_cast<float>(end_x),
-                     static_cast<float>(end_y), end_color, depth);
-          }
-
-          start_x = end_x;
-          start_y = end_y;
-          start_color = end_color;
-        }
-      }
-    }
-    break;
-
-    default:
-      UnreachableCode();
-      break;
+    const GPUBackendDrawPolygonCommand::Vertex& v = cmd->vertices[i];
+    vertices[i].Set(v.precise_x, v.precise_y, depth, v.precise_w, v.color, texpage, v.texcoord, 0xFFFF0000u);
   }
+
+  if (rc.quad_polygon && m_resolution_scale > 1)
+    HandleFlippedQuadTextureCoordinates(vertices.data());
+
+  if (m_using_uv_limits && textured)
+    ComputePolygonUVLimits(vertices.data(), cmd->num_vertices);
+
+  std::memcpy(m_batch_current_vertex_ptr, vertices.data(), sizeof(BatchVertex) * 3);
+  m_batch_current_vertex_ptr += 3;
+
+  // quads
+  if (rc.quad_polygon)
+  {
+    AddVertex(vertices[2]);
+    AddVertex(vertices[1]);
+    AddVertex(vertices[3]);
+  }
+
+  IncludeVRAMDityRectangle(cmd->bounds);
+}
+
+void GPU_HW::DrawRectangle(const GPUBackendDrawRectangleCommand* cmd)
+{
+  SetupDraw(cmd);
+  if (cmd->params.check_mask_before_draw)
+    m_current_depth++;
+
+  const GPURenderCommand rc{cmd->rc.bits};
+  const u32 color = cmd->color;
+  const u32 texpage = ZeroExtend32(cmd->draw_mode.bits) | (ZeroExtend32(cmd->palette.bits) << 16);
+  const float depth = GetCurrentNormalizedVertexDepth();
+  u16 orig_tex_left = cmd->texcoord & 0xFFu;
+  u16 orig_tex_top = cmd->texcoord >> 8;
+
+  // Split the rectangle into multiple quads if it's greater than 256x256, as the texture page should repeat.
+  u16 tex_top = orig_tex_top;
+  for (u16 y_offset = 0; y_offset < cmd->height;)
+  {
+    const u16 quad_height = std::min<u16>(cmd->height - y_offset, TEXTURE_PAGE_WIDTH - tex_top);
+    const float quad_start_y = static_cast<float>(cmd->y + y_offset);
+    const float quad_end_y = quad_start_y + static_cast<float>(quad_height);
+    const u16 tex_bottom = tex_top + static_cast<u16>(quad_height);
+
+    u16 tex_left = orig_tex_left;
+    for (u16 x_offset = 0; x_offset < cmd->width;)
+    {
+      const u16 quad_width = std::min<u16>(cmd->width - x_offset, TEXTURE_PAGE_HEIGHT - tex_left);
+      const float quad_start_x = static_cast<float>(cmd->x + x_offset);
+      const float quad_end_x = quad_start_x + static_cast<float>(quad_width);
+      const u16 tex_right = tex_left + static_cast<u16>(quad_width);
+      const u32 uv_limits = BatchVertex::PackUVLimits(tex_left, tex_right - 1, tex_top, tex_bottom - 1);
+
+      AddNewVertex(quad_start_x, quad_start_y, depth, 1.0f, color, texpage, tex_left, tex_top, uv_limits);
+      AddNewVertex(quad_end_x, quad_start_y, depth, 1.0f, color, texpage, tex_right, tex_top, uv_limits);
+      AddNewVertex(quad_start_x, quad_end_y, depth, 1.0f, color, texpage, tex_left, tex_bottom, uv_limits);
+
+      AddNewVertex(quad_start_x, quad_end_y, depth, 1.0f, color, texpage, tex_left, tex_bottom, uv_limits);
+      AddNewVertex(quad_end_x, quad_start_y, depth, 1.0f, color, texpage, tex_right, tex_top, uv_limits);
+      AddNewVertex(quad_end_x, quad_end_y, depth, 1.0f, color, texpage, tex_right, tex_bottom, uv_limits);
+
+      x_offset += quad_width;
+      tex_left = 0;
+    }
+
+    y_offset += quad_height;
+    tex_top = 0;
+  }
+
+  IncludeVRAMDityRectangle(cmd->bounds);
+}
+
+void GPU_HW::DrawLine(const GPUBackendDrawLineCommand* cmd)
+{
+  SetupDraw(cmd);
+  if (cmd->params.check_mask_before_draw)
+    m_current_depth++;
+
+  const GPURenderCommand rc{cmd->rc.bits};
+  const float depth = GetCurrentNormalizedVertexDepth();
+
+  for (u32 i = 1; i < cmd->num_vertices; i++)
+  {
+    const GPUBackendDrawLineCommand::Vertex& start = cmd->vertices[i - 1u];
+    const GPUBackendDrawLineCommand::Vertex& end = cmd->vertices[i];
+
+    DrawLine(static_cast<float>(start.x), static_cast<float>(start.y), start.color, static_cast<float>(end.x),
+             static_cast<float>(end.y), end.color, depth);
+  }
+
+  IncludeVRAMDityRectangle(cmd->bounds);
 }
 
 void GPU_HW::CalcScissorRect(int* left, int* top, int* right, int* bottom)
@@ -696,7 +459,8 @@ void GPU_HW::CalcScissorRect(int* left, int* top, int* right, int* bottom)
   *bottom = std::max<u32>((m_drawing_area.bottom + 1) * m_resolution_scale, *top + 1);
 }
 
-GPU_HW::VRAMFillUBOData GPU_HW::GetVRAMFillUBOData(u32 x, u32 y, u32 width, u32 height, u32 color) const
+GPU_HW::VRAMFillUBOData GPU_HW::GetVRAMFillUBOData(u32 x, u32 y, u32 width, u32 height, u32 color,
+                                                   GPUBackendCommandParameters params) const
 {
   // drop precision unless true colour is enabled
   if (!m_true_color)
@@ -705,7 +469,7 @@ GPU_HW::VRAMFillUBOData GPU_HW::GetVRAMFillUBOData(u32 x, u32 y, u32 width, u32 
   VRAMFillUBOData uniforms;
   std::tie(uniforms.u_fill_color[0], uniforms.u_fill_color[1], uniforms.u_fill_color[2], uniforms.u_fill_color[3]) =
     RGBA8ToFloat(color);
-  uniforms.u_interlaced_displayed_field = GetActiveLineLSB();
+  uniforms.u_interlaced_displayed_field = params.active_line_lsb;
   return uniforms;
 }
 
@@ -725,7 +489,8 @@ Common::Rectangle<u32> GPU_HW::GetVRAMTransferBounds(u32 x, u32 y, u32 width, u3
   return out_rc;
 }
 
-GPU_HW::VRAMWriteUBOData GPU_HW::GetVRAMWriteUBOData(u32 x, u32 y, u32 width, u32 height, u32 buffer_offset) const
+GPU_HW::VRAMWriteUBOData GPU_HW::GetVRAMWriteUBOData(u32 x, u32 y, u32 width, u32 height, u32 buffer_offset,
+                                                     GPUBackendCommandParameters params) const
 {
   const VRAMWriteUBOData uniforms = {(x % VRAM_WIDTH),
                                      (y % VRAM_HEIGHT),
@@ -734,23 +499,24 @@ GPU_HW::VRAMWriteUBOData GPU_HW::GetVRAMWriteUBOData(u32 x, u32 y, u32 width, u3
                                      width,
                                      height,
                                      buffer_offset,
-                                     m_GPUSTAT.set_mask_while_drawing ? 0x8000u : 0x00,
+                                     params.set_mask_while_drawing ? 0x8000u : 0x00,
                                      GetCurrentNormalizedVertexDepth()};
   return uniforms;
 }
 
-bool GPU_HW::UseVRAMCopyShader(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32 height) const
+bool GPU_HW::UseVRAMCopyShader(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32 height,
+                               GPUBackendCommandParameters params) const
 {
   // masking enabled, oversized, or overlapping
-  return (m_GPUSTAT.IsMaskingEnabled() || ((src_x % VRAM_WIDTH) + width) > VRAM_WIDTH ||
+  return (params.IsMaskingEnabled() || ((src_x % VRAM_WIDTH) + width) > VRAM_WIDTH ||
           ((src_y % VRAM_HEIGHT) + height) > VRAM_HEIGHT || ((dst_x % VRAM_WIDTH) + width) > VRAM_WIDTH ||
           ((dst_y % VRAM_HEIGHT) + height) > VRAM_HEIGHT ||
           Common::Rectangle<u32>::FromExtents(src_x, src_y, width, height)
             .Intersects(Common::Rectangle<u32>::FromExtents(dst_x, dst_y, width, height)));
 }
 
-GPU_HW::VRAMCopyUBOData GPU_HW::GetVRAMCopyUBOData(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width,
-                                                   u32 height) const
+GPU_HW::VRAMCopyUBOData GPU_HW::GetVRAMCopyUBOData(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32 height,
+                                                   GPUBackendCommandParameters params) const
 {
   const VRAMCopyUBOData uniforms = {(src_x % VRAM_WIDTH) * m_resolution_scale,
                                     (src_y % VRAM_HEIGHT) * m_resolution_scale,
@@ -760,7 +526,7 @@ GPU_HW::VRAMCopyUBOData GPU_HW::GetVRAMCopyUBOData(u32 src_x, u32 src_y, u32 dst
                                     ((dst_y + height) % VRAM_HEIGHT) * m_resolution_scale,
                                     width * m_resolution_scale,
                                     height * m_resolution_scale,
-                                    m_GPUSTAT.set_mask_while_drawing ? 1u : 0u,
+                                    params.set_mask_while_drawing ? 1u : 0u,
                                     GetCurrentNormalizedVertexDepth()};
 
   return uniforms;
@@ -770,6 +536,7 @@ void GPU_HW::IncludeVRAMDityRectangle(const Common::Rectangle<u32>& rect)
 {
   m_vram_dirty_rect.Include(rect);
 
+#if FIXME
   // the vram area can include the texture page, but the game can leave it as-is. in this case, set it as dirty so the
   // shadow texture is updated
   if (!m_draw_mode.IsTexturePageChanged() &&
@@ -778,6 +545,13 @@ void GPU_HW::IncludeVRAMDityRectangle(const Common::Rectangle<u32>& rect)
   {
     m_draw_mode.SetTexturePageChanged();
   }
+#endif
+}
+
+void GPU_HW::IncludeVRAMDityRectangle(const Common::Rectangle<u16>& rect)
+{
+  IncludeVRAMDityRectangle(Common::Rectangle<u32>(ZeroExtend32(rect.left), ZeroExtend32(rect.top),
+                                                  ZeroExtend32(rect.right), ZeroExtend32(rect.bottom)));
 }
 
 void GPU_HW::EnsureVertexBufferSpace(u32 required_vertices)
@@ -793,20 +567,20 @@ void GPU_HW::EnsureVertexBufferSpace(u32 required_vertices)
   MapBatchVertexPointer(required_vertices);
 }
 
-void GPU_HW::EnsureVertexBufferSpaceForCurrentCommand()
+void GPU_HW::EnsureVertexBufferSpace(const GPUBackendDrawCommand* cmd)
 {
   u32 required_vertices;
-  switch (m_render_command.primitive)
+  switch (cmd->type)
   {
-    case Primitive::Polygon:
-      required_vertices = m_render_command.quad_polygon ? 6 : 3;
+    case GPUBackendCommandType::DrawPolygon:
+      required_vertices = cmd->rc.quad_polygon ? 6 : 3;
       break;
-    case Primitive::Rectangle:
+    case GPUBackendCommandType::DrawRectangle:
       required_vertices = MAX_VERTICES_FOR_RECTANGLE;
       break;
-    case Primitive::Line:
+    case GPUBackendCommandType::DrawLine:
     default:
-      required_vertices = m_render_command.polyline ? (GetPolyLineVertexCount() * 6u) : 6u;
+      required_vertices = static_cast<const GPUBackendDrawLineCommand*>(cmd)->num_vertices * 3u;
       break;
   }
 
@@ -836,50 +610,55 @@ void GPU_HW::ResetBatchVertexDepth()
   m_current_depth = 1;
 }
 
-void GPU_HW::FillVRAM(u32 x, u32 y, u32 width, u32 height, u32 color)
+void GPU_HW::FillVRAM(u32 x, u32 y, u32 width, u32 height, u32 color, GPUBackendCommandParameters params)
 {
   IncludeVRAMDityRectangle(
     Common::Rectangle<u32>::FromExtents(x, y, width, height).Clamped(0, 0, VRAM_WIDTH, VRAM_HEIGHT));
 }
 
-void GPU_HW::UpdateVRAM(u32 x, u32 y, u32 width, u32 height, const void* data)
+void GPU_HW::UpdateVRAM(u32 x, u32 y, u32 width, u32 height, const void* data, GPUBackendCommandParameters params)
 {
   DebugAssert((x + width) <= VRAM_WIDTH && (y + height) <= VRAM_HEIGHT);
   IncludeVRAMDityRectangle(Common::Rectangle<u32>::FromExtents(x, y, width, height));
 
-  if (m_GPUSTAT.check_mask_before_draw)
+  if (params.check_mask_before_draw)
   {
     // set new vertex counter since we want this to take into consideration previous masked pixels
     m_current_depth++;
   }
 }
 
-void GPU_HW::CopyVRAM(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32 height)
+void GPU_HW::CopyVRAM(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32 height,
+                      GPUBackendCommandParameters params)
 {
   IncludeVRAMDityRectangle(
     Common::Rectangle<u32>::FromExtents(dst_x, dst_y, width, height).Clamped(0, 0, VRAM_WIDTH, VRAM_HEIGHT));
 
-  if (m_GPUSTAT.check_mask_before_draw)
+  if (params.check_mask_before_draw)
   {
     // set new vertex counter since we want this to take into consideration previous masked pixels
     m_current_depth++;
   }
 }
 
-void GPU_HW::DispatchRenderCommand()
+void GPU_HW::SetupDraw(const GPUBackendDrawCommand* cmd)
 {
-  const RenderCommand rc{m_render_command.bits};
+  const GPURenderCommand rc{cmd->rc.bits};
 
-  TextureMode texture_mode;
+  GPUTextureMode texture_mode;
   if (rc.IsTexturingEnabled())
   {
     // texture page changed - check that the new page doesn't intersect the drawing area
-    if (m_draw_mode.IsTexturePageChanged())
+    if ((cmd->draw_mode.bits & GPUDrawModeReg::TEXTURE_PAGE_MASK) !=
+          (m_last_texture_page_bits.bits & GPUDrawModeReg::TEXTURE_PAGE_MASK) ||
+        true)
     {
-      m_draw_mode.ClearTexturePageChangedFlag();
+      m_last_texture_page_bits.bits = cmd->draw_mode.bits;
+
       if (m_vram_dirty_rect.Valid() &&
-          (m_draw_mode.GetTexturePageRectangle().Intersects(m_vram_dirty_rect) ||
-           (m_draw_mode.IsUsingPalette() && m_draw_mode.GetTexturePaletteRectangle().Intersects(m_vram_dirty_rect))))
+          (m_last_texture_page_bits.GetTexturePageRectangle().Intersects(m_vram_dirty_rect) ||
+           (m_last_texture_page_bits.IsUsingPalette() &&
+            m_last_texture_page_bits.GetTexturePaletteRectangle().Intersects(m_vram_dirty_rect))))
       {
         // Log_DevPrintf("Invalidating VRAM read cache due to drawing area overlap");
         if (!IsFlushed())
@@ -889,32 +668,32 @@ void GPU_HW::DispatchRenderCommand()
       }
     }
 
-    texture_mode = m_draw_mode.GetTextureMode();
+    texture_mode = cmd->draw_mode.texture_mode;
     if (rc.raw_texture_enable)
     {
       texture_mode =
-        static_cast<TextureMode>(static_cast<u8>(texture_mode) | static_cast<u8>(TextureMode::RawTextureBit));
+        static_cast<GPUTextureMode>(static_cast<u8>(texture_mode) | static_cast<u8>(GPUTextureMode::RawTextureBit));
     }
   }
   else
   {
-    texture_mode = TextureMode::Disabled;
+    texture_mode = GPUTextureMode::Disabled;
   }
 
   // has any state changed which requires a new batch?
-  const TransparencyMode transparency_mode =
-    rc.transparency_enable ? m_draw_mode.GetTransparencyMode() : TransparencyMode::Disabled;
-  const bool dithering_enable = (!m_true_color && rc.IsDitheringEnabled()) ? m_GPUSTAT.dither_enable : false;
+  const GPUTransparencyMode transparency_mode =
+    rc.transparency_enable ? cmd->draw_mode.transparency_mode : GPUTransparencyMode::Disabled;
+  const bool dithering_enable = (!m_true_color && rc.IsDitheringEnabled()) ? cmd->draw_mode.dither_enable : false;
   if (m_batch.texture_mode != texture_mode || m_batch.transparency_mode != transparency_mode ||
       dithering_enable != m_batch.dithering)
   {
     FlushRender();
   }
 
-  EnsureVertexBufferSpaceForCurrentCommand();
+  EnsureVertexBufferSpace(cmd);
 
   // transparency mode change
-  if (m_batch.transparency_mode != transparency_mode && transparency_mode != TransparencyMode::Disabled)
+  if (m_batch.transparency_mode != transparency_mode && transparency_mode != GPUTransparencyMode::Disabled)
   {
     static constexpr float transparent_alpha[4][2] = {{0.5f, 0.5f}, {1.0f, 1.0f}, {1.0f, 1.0f}, {0.25f, 1.0f}};
     m_batch_ubo_data.u_src_alpha_factor = transparent_alpha[static_cast<u32>(transparency_mode)][0];
@@ -922,19 +701,19 @@ void GPU_HW::DispatchRenderCommand()
     m_batch_ubo_dirty = true;
   }
 
-  if (m_batch.check_mask_before_draw != m_GPUSTAT.check_mask_before_draw ||
-      m_batch.set_mask_while_drawing != m_GPUSTAT.set_mask_while_drawing)
+  if (m_batch.check_mask_before_draw != cmd->params.check_mask_before_draw ||
+      m_batch.set_mask_while_drawing != cmd->params.set_mask_while_drawing)
   {
-    m_batch.check_mask_before_draw = m_GPUSTAT.check_mask_before_draw;
-    m_batch.set_mask_while_drawing = m_GPUSTAT.set_mask_while_drawing;
+    m_batch.check_mask_before_draw = cmd->params.check_mask_before_draw;
+    m_batch.set_mask_while_drawing = cmd->params.set_mask_while_drawing;
     m_batch_ubo_data.u_set_mask_while_drawing = BoolToUInt32(m_batch.set_mask_while_drawing);
     m_batch_ubo_dirty = true;
   }
 
-  m_batch.interlacing = IsInterlacedRenderingEnabled();
+  m_batch.interlacing = cmd->params.interlaced_rendering;
   if (m_batch.interlacing)
   {
-    const u32 displayed_field = GetActiveLineLSB();
+    const u32 displayed_field = cmd->params.active_line_lsb;
     m_batch_ubo_dirty |= (m_batch_ubo_data.u_interlaced_displayed_field != displayed_field);
     m_batch_ubo_data.u_interlaced_displayed_field = displayed_field;
   }
@@ -944,18 +723,16 @@ void GPU_HW::DispatchRenderCommand()
   m_batch.transparency_mode = transparency_mode;
   m_batch.dithering = dithering_enable;
 
-  if (m_draw_mode.IsTextureWindowChanged())
+  if (m_last_texture_window_reg.bits != cmd->window.bits)
   {
-    m_draw_mode.ClearTextureWindowChangedFlag();
+    m_last_texture_window_reg.bits = cmd->window.bits;
 
-    m_batch_ubo_data.u_texture_window_mask[0] = ZeroExtend32(m_draw_mode.texture_window_mask_x);
-    m_batch_ubo_data.u_texture_window_mask[1] = ZeroExtend32(m_draw_mode.texture_window_mask_y);
-    m_batch_ubo_data.u_texture_window_offset[0] = ZeroExtend32(m_draw_mode.texture_window_offset_x);
-    m_batch_ubo_data.u_texture_window_offset[1] = ZeroExtend32(m_draw_mode.texture_window_offset_y);
+    m_batch_ubo_data.u_texture_window_mask[0] = ZeroExtend32(cmd->window.mask_x.GetValue());
+    m_batch_ubo_data.u_texture_window_mask[1] = ZeroExtend32(cmd->window.mask_y.GetValue());
+    m_batch_ubo_data.u_texture_window_offset[0] = ZeroExtend32(cmd->window.offset_x.GetValue());
+    m_batch_ubo_data.u_texture_window_offset[1] = ZeroExtend32(cmd->window.offset_y.GetValue());
     m_batch_ubo_dirty = true;
   }
-
-  LoadVertices();
 }
 
 void GPU_HW::FlushRender()
@@ -1020,8 +797,10 @@ void GPU_HW::DrawRendererStats(bool is_idle_frame)
 
     ImGui::TextUnformatted("Effective Display Resolution:");
     ImGui::NextColumn();
+#if FIXME
     ImGui::Text("%ux%u", m_crtc_state.display_vram_width * m_resolution_scale,
                 m_crtc_state.display_vram_height * m_resolution_scale);
+#endif
     ImGui::NextColumn();
 
     ImGui::TextUnformatted("True Color:");

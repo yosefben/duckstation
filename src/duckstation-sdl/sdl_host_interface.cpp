@@ -7,6 +7,7 @@
 #include "core/cheats.h"
 #include "core/controller.h"
 #include "core/gpu.h"
+#include "core/gpu_backend.h"
 #include "core/host_display.h"
 #include "core/system.h"
 #include "frontend-common/icon.h"
@@ -376,7 +377,7 @@ bool SDLHostInterface::SetFullscreen(bool enabled)
   m_display->ResizeRenderWindow(window_width, window_height);
 
   if (!System::IsShutdown())
-    g_gpu->UpdateResolutionScale();
+    g_gpu_backend->UpdateResolutionScale();
 
   m_fullscreen = enabled;
   return true;
@@ -534,7 +535,7 @@ void SDLHostInterface::HandleSDLEvent(const SDL_Event* event)
         UpdateFramebufferScale();
 
         if (!System::IsShutdown())
-          g_gpu->UpdateResolutionScale();
+          g_gpu_backend->UpdateResolutionScale();
       }
       else if (event->window.event == SDL_WINDOWEVENT_MOVED)
       {
@@ -824,11 +825,11 @@ void SDLHostInterface::DrawMainMenuBar()
     }
     else
     {
-      ImGui::SetCursorPosX(ImGui::GetIO().DisplaySize.x - (420.0f * framebuffer_scale));
-      ImGui::Text("Average: %.2fms", System::GetAverageFrameTime());
+      ImGui::SetCursorPosX(ImGui::GetIO().DisplaySize.x - (500.0f * framebuffer_scale));
+      ImGui::Text("Average: %.2fms / %.2fms", System::GetAverageFrameTime(), System::GetAverageCPUFrameTime());
 
-      ImGui::SetCursorPosX(ImGui::GetIO().DisplaySize.x - (310.0f * framebuffer_scale));
-      ImGui::Text("Worst: %.2fms", System::GetWorstFrameTime());
+      ImGui::SetCursorPosX(ImGui::GetIO().DisplaySize.x - (350.0f * framebuffer_scale));
+      ImGui::Text("Worst: %.2fms / %.2fms", System::GetWorstFrameTime(), System::GetWorstCPUFrameTime());
 
       ImGui::SetCursorPosX(ImGui::GetIO().DisplaySize.x - (210.0f * framebuffer_scale));
 
@@ -907,7 +908,7 @@ void SDLHostInterface::DrawQuickSettingsMenu()
     for (u32 scale = 1; scale <= GPU::MAX_RESOLUTION_SCALE; scale++)
     {
       char buf[32];
-      std::snprintf(buf, sizeof(buf), "%ux (%ux%u)", scale, scale * GPU::VRAM_WIDTH, scale * GPU::VRAM_HEIGHT);
+      std::snprintf(buf, sizeof(buf), "%ux (%ux%u)", scale, scale * VRAM_WIDTH, scale * VRAM_HEIGHT);
 
       if (ImGui::MenuItem(buf, nullptr, current_internal_resolution == scale))
       {
@@ -1653,7 +1654,7 @@ void SDLHostInterface::Run()
 
       if (System::IsRunning())
       {
-        System::UpdatePerformanceCounters();
+        System::EndFrame();
 
         if (m_speed_limiter_enabled)
           System::Throttle();

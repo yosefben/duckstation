@@ -66,6 +66,8 @@ void Shutdown()
 
 void Reset()
 {
+  g_state.frame_done = true;
+
   g_state.pending_ticks = 0;
   g_state.downcount = MAX_SLICE_SIZE;
 
@@ -1368,7 +1370,6 @@ restart_instruction:
 template<PGXPMode pgxp_mode>
 static void ExecuteImpl()
 {
-  g_state.frame_done = false;
   while (!g_state.frame_done)
   {
     TimingEvents::UpdateCPUDowncount();

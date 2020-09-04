@@ -11,6 +11,7 @@
 #include "core/cpu_code_cache.h"
 #include "core/dma.h"
 #include "core/gpu.h"
+#include "core/gpu_backend.h"
 #include "core/host_display.h"
 #include "core/mdec.h"
 #include "core/pgxp.h"
@@ -825,8 +826,8 @@ void CommonHostInterface::DrawFPSWindow()
 
   if (g_settings.display_show_resolution)
   {
-    const auto [effective_width, effective_height] = g_gpu->GetEffectiveDisplayResolution();
-    const bool interlaced = g_gpu->IsInterlacedDisplayEnabled();
+    const auto [effective_width, effective_height] = g_gpu_backend->GetEffectiveDisplayResolution();
+    const bool interlaced = g_gpu.IsInterlacedDisplayEnabled();
     ImGui::Text("%ux%u (%s)", effective_width, effective_height, interlaced ? "interlaced" : "progressive");
   }
 
@@ -906,7 +907,7 @@ void CommonHostInterface::DrawOSDMessages()
 void CommonHostInterface::DrawDebugWindows()
 {
   if (g_settings.debugging.show_gpu_state)
-    g_gpu->DrawDebugStateWindow();
+    g_gpu.DrawDebugStateWindow();
   if (g_settings.debugging.show_cdrom_state)
     g_cdrom.DrawDebugWindow();
   if (g_settings.debugging.show_timers_state)
@@ -1419,7 +1420,7 @@ void CommonHostInterface::RegisterGraphicsHotkeys()
                    if (!pressed)
                    {
                      g_settings.gpu_pgxp_enable = !g_settings.gpu_pgxp_enable;
-                     g_gpu->UpdateSettings();
+                     g_gpu.UpdateSettings();
                      AddFormattedOSDMessage(5.0f, "PGXP is now %s.",
                                             g_settings.gpu_pgxp_enable ? "enabled" : "disabled");
 

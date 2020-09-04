@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include <cstring>
 #include <limits>
 #include <tuple>
 #include <type_traits>
@@ -63,10 +64,7 @@ struct Rectangle
   /// Assignment operator.
   constexpr Rectangle& operator=(const Rectangle& rhs)
   {
-    left = rhs.left;
-    top = rhs.top;
-    right = rhs.right;
-    bottom = rhs.bottom;
+    std::memcpy(this, &rhs, sizeof(Rectangle));
     return *this;
   }
 

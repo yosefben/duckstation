@@ -19,7 +19,7 @@ public:
   GPU_HW_D3D11();
   ~GPU_HW_D3D11() override;
 
-  bool Initialize(HostDisplay* host_display) override;
+  bool Initialize() override;
   void Reset() override;
 
   void ResetGraphicsAPIState() override;
@@ -30,9 +30,9 @@ protected:
   void ClearDisplay() override;
   void UpdateDisplay() override;
   void ReadVRAM(u32 x, u32 y, u32 width, u32 height) override;
-  void FillVRAM(u32 x, u32 y, u32 width, u32 height, u32 color) override;
-  void UpdateVRAM(u32 x, u32 y, u32 width, u32 height, const void* data) override;
-  void CopyVRAM(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32 height) override;
+  void FillVRAM(u32 x, u32 y, u32 width, u32 height, u32 color, GPUBackendCommandParameters params) override;
+  void UpdateVRAM(u32 x, u32 y, u32 width, u32 height, const void* data, GPUBackendCommandParameters params) override;
+  void CopyVRAM(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32 height, GPUBackendCommandParameters params) override;
   void UpdateVRAMReadTexture() override;
   void UpdateDepthBufferFromMaskBit() override;
   void SetScissorFromDrawingArea() override;

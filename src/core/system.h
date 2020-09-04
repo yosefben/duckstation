@@ -45,7 +45,8 @@ enum class State
   Shutdown,
   Starting,
   Running,
-  Paused
+  Paused,
+  Stopping
 };
 
 /// Returns true if the filename is a PlayStation executable we can inject.
@@ -93,7 +94,9 @@ float GetFPS();
 float GetVPS();
 float GetEmulationSpeed();
 float GetAverageFrameTime();
+float GetAverageCPUFrameTime();
 float GetWorstFrameTime();
+float GetWorstCPUFrameTime();
 float GetThrottleFrequency();
 
 bool Boot(const SystemBootParameters& params);
@@ -117,7 +120,7 @@ void UpdateThrottlePeriod();
 /// Throttles the system, i.e. sleeps until it's time to execute the next frame.
 void Throttle();
 
-void UpdatePerformanceCounters();
+void EndFrame();
 void ResetPerformanceCounters();
 
 // Access controllers for simulating input.

@@ -13,8 +13,8 @@ GPU_HW_D3D11::GPU_HW_D3D11() = default;
 
 GPU_HW_D3D11::~GPU_HW_D3D11()
 {
-  if (m_host_display)
-    m_host_display->ClearDisplayTexture();
+  if (g_host_interface->GetDisplay())
+    g_host_interface->GetDisplay()->ClearDisplayTexture();
 
   m_context->ClearState();
 
@@ -22,8 +22,9 @@ GPU_HW_D3D11::~GPU_HW_D3D11()
   DestroyStateObjects();
 }
 
-bool GPU_HW_D3D11::Initialize(HostDisplay* host_display)
+bool GPU_HW_D3D11::Initialize()
 {
+  HostDisplay* host_display = g_host_interface->GetDisplay();
   if (host_display->GetRenderAPI() != HostDisplay::RenderAPI::D3D11)
   {
     Log_ErrorPrintf("Host render API is incompatible");
@@ -32,7 +33,7 @@ bool GPU_HW_D3D11::Initialize(HostDisplay* host_display)
 
   SetCapabilities();
 
-  if (!GPU_HW::Initialize(host_display))
+  if (!GPU_HW::Initialize())
     return false;
 
   m_device = static_cast<ID3D11Device*>(host_display->GetRenderDevice());
@@ -92,8 +93,6 @@ void GPU_HW_D3D11::Reset()
 
 void GPU_HW_D3D11::ResetGraphicsAPIState()
 {
-  GPU_HW::ResetGraphicsAPIState();
-
   m_context->GSSetShader(nullptr, nullptr, 0);
 
   // In D3D11 we can't leave a buffer mapped across a Present() call.
@@ -126,7 +125,7 @@ void GPU_HW_D3D11::UpdateSettings()
 
   if (framebuffer_changed)
   {
-    m_host_display->ClearDisplayTexture();
+    g_host_interface->GetDisplay()->ClearDisplayTexture();
     CreateFramebuffer();
   }
 
@@ -333,8 +332,7 @@ bool GPU_HW_D3D11::CreateStateObjects()
   for (u8 transparency_mode = 0; transparency_mode < 5; transparency_mode++)
   {
     bl_desc = CD3D11_BLEND_DESC(CD3D11_DEFAULT());
-    if (transparency_mode != static_cast<u8>(TransparencyMode::Disabled) ||
-        m_texture_filtering != GPUTextureFilter::Nearest)
+    if (transparency_mode != static_cast<u8>(GPUTransparencyMode::Disabled) || m_texture_filtering != GPUTextureFilter::Nearest)
     {
       bl_desc.RenderTarget[0].BlendEnable = TRUE;
       bl_desc.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
@@ -342,7 +340,7 @@ bool GPU_HW_D3D11::CreateStateObjects()
       bl_desc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
       bl_desc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO;
       bl_desc.RenderTarget[0].BlendOp =
-        (transparency_mode == static_cast<u8>(TransparencyMode::BackgroundMinusForeground)) ?
+        (transparency_mode == static_cast<u8>(GPUTransparencyMode::BackgroundMinusForeground)) ?
           D3D11_BLEND_OP_REV_SUBTRACT :
           D3D11_BLEND_OP_ADD;
       bl_desc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
@@ -371,8 +369,8 @@ void GPU_HW_D3D11::DestroyStateObjects()
 
 bool GPU_HW_D3D11::CompileShaders()
 {
-  GPU_HW_ShaderGen shadergen(m_host_display->GetRenderAPI(), m_resolution_scale, m_true_color, m_scaled_dithering,
-                             m_texture_filtering, m_using_uv_limits, m_supports_dual_source_blend);
+  GPU_HW_ShaderGen shadergen(g_host_interface->GetDisplay()->GetRenderAPI(), m_resolution_scale, m_true_color,
+                             m_scaled_dithering, m_texture_filtering, m_using_uv_limits, m_supports_dual_source_blend);
 
   Common::Timer compile_time;
   const int progress_total = 1 + 1 + 2 + (4 * 9 * 2 * 2) + 7 + (2 * 3);
@@ -442,7 +440,7 @@ bool GPU_HW_D3D11::CompileShaders()
         for (u8 interlacing = 0; interlacing < 2; interlacing++)
         {
           const std::string ps = shadergen.GenerateBatchFragmentShader(
-            static_cast<BatchRenderMode>(render_mode), static_cast<TextureMode>(texture_mode),
+            static_cast<BatchRenderMode>(render_mode), static_cast<GPUTextureMode>(texture_mode),
             ConvertToBoolUnchecked(dithering), ConvertToBoolUnchecked(interlacing));
 
           m_batch_pixel_shaders[render_mode][texture_mode][dithering][interlacing] =
@@ -505,8 +503,8 @@ bool GPU_HW_D3D11::CompileShaders()
   {
     for (u8 interlacing = 0; interlacing < 3; interlacing++)
     {
-      const std::string ps = shadergen.GenerateDisplayFragmentShader(ConvertToBoolUnchecked(depth_24bit),
-                                                                     static_cast<InterlacedRenderMode>(interlacing));
+      const std::string ps = shadergen.GenerateDisplayFragmentShader(
+        ConvertToBoolUnchecked(depth_24bit), static_cast<GPUInterlacedDisplayMode>(interlacing));
       m_display_pixel_shaders[depth_24bit][interlacing] = m_shader_cache.GetPixelShader(m_device.Get(), ps);
       if (!m_display_pixel_shaders[depth_24bit][interlacing])
         return false;
@@ -608,7 +606,7 @@ void GPU_HW_D3D11::DrawUtilityShader(ID3D11PixelShader* shader, const void* unif
 
 void GPU_HW_D3D11::DrawBatchVertices(BatchRenderMode render_mode, u32 base_vertex, u32 num_vertices)
 {
-  const bool textured = (m_batch.texture_mode != TextureMode::Disabled);
+  const bool textured = (m_batch.texture_mode != GPUTextureMode::Disabled);
 
   m_context->VSSetShader(m_batch_vertex_shaders[BoolToUInt8(textured)].Get(), nullptr, 0);
 
@@ -617,8 +615,8 @@ void GPU_HW_D3D11::DrawBatchVertices(BatchRenderMode render_mode, u32 base_verte
                                                 .Get(),
                          nullptr, 0);
 
-  const TransparencyMode transparency_mode =
-    (render_mode == BatchRenderMode::OnlyOpaque) ? TransparencyMode::Disabled : m_batch.transparency_mode;
+  const GPUTransparencyMode transparency_mode =
+    (render_mode == BatchRenderMode::OnlyOpaque) ? GPUTransparencyMode::Disabled : m_batch.transparency_mode;
   m_context->OMSetBlendState(m_batch_blend_states[static_cast<u8>(transparency_mode)].Get(), nullptr, 0xFFFFFFFFu);
   m_context->OMSetDepthStencilState(
     m_batch.check_mask_before_draw ? m_depth_test_less_state.Get() : m_depth_test_always_state.Get(), 0);
@@ -637,46 +635,44 @@ void GPU_HW_D3D11::SetScissorFromDrawingArea()
 
 void GPU_HW_D3D11::ClearDisplay()
 {
-  GPU_HW::ClearDisplay();
-
   static constexpr std::array<float, 4> clear_color = {0.0f, 0.0f, 0.0f, 1.0f};
   m_context->ClearRenderTargetView(m_display_texture.GetD3DRTV(), clear_color.data());
 }
 
 void GPU_HW_D3D11::UpdateDisplay()
 {
-  GPU_HW::UpdateDisplay();
+  HostDisplay* display = g_host_interface->GetDisplay();
 
   if (g_settings.debugging.show_vram)
   {
-    m_host_display->SetDisplayTexture(m_vram_texture.GetD3DSRV(), m_vram_texture.GetWidth(), m_vram_texture.GetHeight(),
-                                      0, 0, m_vram_texture.GetWidth(), m_vram_texture.GetHeight());
-    m_host_display->SetDisplayParameters(VRAM_WIDTH, VRAM_HEIGHT, 0, 0, VRAM_WIDTH, VRAM_HEIGHT,
-                                         static_cast<float>(VRAM_WIDTH) / static_cast<float>(VRAM_HEIGHT));
+    display->SetDisplayTexture(m_vram_texture.GetD3DSRV(), m_vram_texture.GetWidth(), m_vram_texture.GetHeight(), 0, 0,
+                               m_vram_texture.GetWidth(), m_vram_texture.GetHeight());
+    display->SetDisplayParameters(VRAM_WIDTH, VRAM_HEIGHT, 0, 0, VRAM_WIDTH, VRAM_HEIGHT,
+                                  static_cast<float>(VRAM_WIDTH) / static_cast<float>(VRAM_HEIGHT));
   }
   else
   {
-    const u32 vram_offset_x = m_crtc_state.display_vram_left;
-    const u32 vram_offset_y = m_crtc_state.display_vram_top;
+    const u32 vram_offset_x = m_display_vram_left;
+    const u32 vram_offset_y = m_display_vram_top;
     const u32 scaled_vram_offset_x = vram_offset_x * m_resolution_scale;
     const u32 scaled_vram_offset_y = vram_offset_y * m_resolution_scale;
-    const u32 display_width = m_crtc_state.display_vram_width;
-    const u32 display_height = m_crtc_state.display_vram_height;
+    const u32 display_width = m_display_vram_width;
+    const u32 display_height = m_display_vram_height;
     const u32 scaled_display_width = display_width * m_resolution_scale;
     const u32 scaled_display_height = display_height * m_resolution_scale;
-    const InterlacedRenderMode interlaced = GetInterlacedRenderMode();
+    const GPUInterlacedDisplayMode interlaced = m_display_interlace;
 
-    if (IsDisplayDisabled())
+    if (!m_display_enabled)
     {
-      m_host_display->ClearDisplayTexture();
+      display->ClearDisplayTexture();
     }
-    else if (!m_GPUSTAT.display_area_color_depth_24 && interlaced == InterlacedRenderMode::None &&
+    else if (!m_display_24bit && interlaced == GPUInterlacedDisplayMode::None &&
              (scaled_vram_offset_x + scaled_display_width) <= m_vram_texture.GetWidth() &&
              (scaled_vram_offset_y + scaled_display_height) <= m_vram_texture.GetHeight())
     {
-      m_host_display->SetDisplayTexture(m_vram_texture.GetD3DSRV(), m_vram_texture.GetWidth(),
-                                        m_vram_texture.GetHeight(), scaled_vram_offset_x, scaled_vram_offset_y,
-                                        scaled_display_width, scaled_display_height);
+      display->SetDisplayTexture(m_vram_texture.GetD3DSRV(), m_vram_texture.GetWidth(), m_vram_texture.GetHeight(),
+                                 scaled_vram_offset_x, scaled_vram_offset_y, scaled_display_width,
+                                 scaled_display_height);
     }
     else
     {
@@ -684,28 +680,26 @@ void GPU_HW_D3D11::UpdateDisplay()
       m_context->OMSetDepthStencilState(m_depth_disabled_state.Get(), 0);
       m_context->PSSetShaderResources(0, 1, m_vram_texture.GetD3DSRVArray());
 
-      const u32 reinterpret_field_offset = (interlaced != InterlacedRenderMode::None) ? GetInterlacedDisplayField() : 0;
-      const u32 reinterpret_start_x = m_crtc_state.regs.X * m_resolution_scale;
-      const u32 reinterpret_crop_left = (m_crtc_state.display_vram_left - m_crtc_state.regs.X) * m_resolution_scale;
+      const u32 reinterpret_field_offset =
+        (interlaced != GPUInterlacedDisplayMode::None) ? m_display_interlace_field : 0;
+      const u32 reinterpret_start_x = m_display_vram_start_x * m_resolution_scale;
+      const u32 reinterpret_crop_left = (m_display_vram_left - m_display_vram_start_x) * m_resolution_scale;
       const u32 uniforms[4] = {reinterpret_start_x, scaled_vram_offset_y + reinterpret_field_offset,
                                reinterpret_crop_left, reinterpret_field_offset};
       ID3D11PixelShader* display_pixel_shader =
-        m_display_pixel_shaders[BoolToUInt8(m_GPUSTAT.display_area_color_depth_24)][static_cast<u8>(interlaced)].Get();
+        m_display_pixel_shaders[BoolToUInt8(m_display_24bit)][static_cast<u8>(interlaced)].Get();
 
       SetViewportAndScissor(0, 0, scaled_display_width, scaled_display_height);
       DrawUtilityShader(display_pixel_shader, uniforms, sizeof(uniforms));
 
-      m_host_display->SetDisplayTexture(m_display_texture.GetD3DSRV(), m_display_texture.GetWidth(),
-                                        m_display_texture.GetHeight(), 0, 0, scaled_display_width,
-                                        scaled_display_height);
+      display->SetDisplayTexture(m_display_texture.GetD3DSRV(), m_display_texture.GetWidth(),
+                                 m_display_texture.GetHeight(), 0, 0, scaled_display_width, scaled_display_height);
 
       RestoreGraphicsAPIState();
     }
 
-    m_host_display->SetDisplayParameters(m_crtc_state.display_width, m_crtc_state.display_height,
-                                         m_crtc_state.display_origin_left, m_crtc_state.display_origin_top,
-                                         m_crtc_state.display_vram_width, m_crtc_state.display_vram_height,
-                                         m_crtc_state.display_aspect_ratio);
+    display->SetDisplayParameters(m_display_width, m_display_height, m_display_origin_left, m_display_origin_top,
+                                  m_display_width, m_display_height, m_display_aspect_ratio);
   }
 }
 
@@ -742,50 +736,50 @@ void GPU_HW_D3D11::ReadVRAM(u32 x, u32 y, u32 width, u32 height)
   RestoreGraphicsAPIState();
 }
 
-void GPU_HW_D3D11::FillVRAM(u32 x, u32 y, u32 width, u32 height, u32 color)
+void GPU_HW_D3D11::FillVRAM(u32 x, u32 y, u32 width, u32 height, u32 color, GPUBackendCommandParameters params)
 {
   if ((x + width) > VRAM_WIDTH || (y + height) > VRAM_HEIGHT)
   {
     // CPU round trip if oversized for now.
     Log_WarningPrintf("Oversized VRAM fill (%u-%u, %u-%u), CPU round trip", x, x + width, y, y + height);
     ReadVRAM(0, 0, VRAM_WIDTH, VRAM_HEIGHT);
-    GPU::FillVRAM(x, y, width, height, color);
-    UpdateVRAM(0, 0, VRAM_WIDTH, VRAM_HEIGHT, m_vram_shadow.data());
+    SoftwareFillVRAM(x, y, width, height, color, params);
+    UpdateVRAM(0, 0, VRAM_WIDTH, VRAM_HEIGHT, m_vram_shadow.data(), params);
     return;
   }
 
-  GPU_HW::FillVRAM(x, y, width, height, color);
+  GPU_HW::FillVRAM(x, y, width, height, color, params);
 
-  const VRAMFillUBOData uniforms = GetVRAMFillUBOData(x, y, width, height, color);
+  const VRAMFillUBOData uniforms = GetVRAMFillUBOData(x, y, width, height, color, params);
 
   m_context->OMSetDepthStencilState(m_depth_test_always_state.Get(), 0);
 
   SetViewportAndScissor(x * m_resolution_scale, y * m_resolution_scale, width * m_resolution_scale,
                         height * m_resolution_scale);
-  DrawUtilityShader(IsInterlacedRenderingEnabled() ? m_vram_interlaced_fill_pixel_shader.Get() :
-                                                     m_vram_fill_pixel_shader.Get(),
+  DrawUtilityShader(params.interlaced_rendering ? m_vram_interlaced_fill_pixel_shader.Get() :
+                                                  m_vram_fill_pixel_shader.Get(),
                     &uniforms, sizeof(uniforms));
 
   RestoreGraphicsAPIState();
 }
 
-void GPU_HW_D3D11::UpdateVRAM(u32 x, u32 y, u32 width, u32 height, const void* data)
+void GPU_HW_D3D11::UpdateVRAM(u32 x, u32 y, u32 width, u32 height, const void* data, GPUBackendCommandParameters params)
 {
   const Common::Rectangle<u32> bounds = GetVRAMTransferBounds(x, y, width, height);
-  GPU_HW::UpdateVRAM(bounds.left, bounds.top, bounds.GetWidth(), bounds.GetHeight(), data);
+  GPU_HW::UpdateVRAM(bounds.left, bounds.top, bounds.GetWidth(), bounds.GetHeight(), data, params);
 
   const u32 num_pixels = width * height;
   const auto map_result = m_texture_stream_buffer.Map(m_context.Get(), sizeof(u16), num_pixels * sizeof(u16));
   std::memcpy(map_result.pointer, data, num_pixels * sizeof(u16));
   m_texture_stream_buffer.Unmap(m_context.Get(), num_pixels * sizeof(u16));
 
-  const VRAMWriteUBOData uniforms = GetVRAMWriteUBOData(x, y, width, height, map_result.index_aligned);
+  const VRAMWriteUBOData uniforms = GetVRAMWriteUBOData(x, y, width, height, map_result.index_aligned, params);
   m_context->OMSetDepthStencilState(
-    m_GPUSTAT.check_mask_before_draw ? m_depth_test_less_state.Get() : m_depth_test_always_state.Get(), 0);
+    params.check_mask_before_draw ? m_depth_test_less_state.Get() : m_depth_test_always_state.Get(), 0);
   m_context->PSSetShaderResources(0, 1, m_texture_stream_buffer_srv_r16ui.GetAddressOf());
 
   // the viewport should already be set to the full vram, so just adjust the scissor
-  const Common::Rectangle<u32> scaled_bounds = bounds * m_resolution_scale;
+  const Common::Rectangle<u32> scaled_bounds(ScaleVRAMRect(bounds));
   SetScissor(scaled_bounds.left, scaled_bounds.top, scaled_bounds.GetWidth(), scaled_bounds.GetHeight());
 
   DrawUtilityShader(m_vram_write_pixel_shader.Get(), &uniforms, sizeof(uniforms));
@@ -793,9 +787,10 @@ void GPU_HW_D3D11::UpdateVRAM(u32 x, u32 y, u32 width, u32 height, const void* d
   RestoreGraphicsAPIState();
 }
 
-void GPU_HW_D3D11::CopyVRAM(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32 height)
+void GPU_HW_D3D11::CopyVRAM(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32 height,
+                            GPUBackendCommandParameters params)
 {
-  if (UseVRAMCopyShader(src_x, src_y, dst_x, dst_y, width, height))
+  if (UseVRAMCopyShader(src_x, src_y, dst_x, dst_y, width, height, params))
   {
     const Common::Rectangle<u32> src_bounds = GetVRAMTransferBounds(src_x, src_y, width, height);
     const Common::Rectangle<u32> dst_bounds = GetVRAMTransferBounds(dst_x, dst_y, width, height);
@@ -803,18 +798,18 @@ void GPU_HW_D3D11::CopyVRAM(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 widt
       UpdateVRAMReadTexture();
     IncludeVRAMDityRectangle(dst_bounds);
 
-    const VRAMCopyUBOData uniforms = GetVRAMCopyUBOData(src_x, src_y, dst_x, dst_y, width, height);
+    const VRAMCopyUBOData uniforms = GetVRAMCopyUBOData(src_x, src_y, dst_x, dst_y, width, height, params);
 
-    const Common::Rectangle<u32> dst_bounds_scaled(dst_bounds * m_resolution_scale);
+    const Common::Rectangle<u32> dst_bounds_scaled(ScaleVRAMRect(dst_bounds));
     SetViewportAndScissor(dst_bounds_scaled.left, dst_bounds_scaled.top, dst_bounds_scaled.GetWidth(),
                           dst_bounds_scaled.GetHeight());
     m_context->OMSetDepthStencilState(
-      m_GPUSTAT.check_mask_before_draw ? m_depth_test_less_state.Get() : m_depth_test_always_state.Get(), 0);
+      params.check_mask_before_draw ? m_depth_test_less_state.Get() : m_depth_test_always_state.Get(), 0);
     m_context->PSSetShaderResources(0, 1, m_vram_read_texture.GetD3DSRVArray());
     DrawUtilityShader(m_vram_copy_pixel_shader.Get(), &uniforms, sizeof(uniforms));
     RestoreGraphicsAPIState();
 
-    if (m_GPUSTAT.check_mask_before_draw)
+    if (params.check_mask_before_draw)
       m_current_depth++;
 
     return;
@@ -826,7 +821,7 @@ void GPU_HW_D3D11::CopyVRAM(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 widt
   if (m_vram_dirty_rect.Intersects(Common::Rectangle<u32>::FromExtents(src_x, src_y, width, height)))
     UpdateVRAMReadTexture();
 
-  GPU_HW::CopyVRAM(src_x, src_y, dst_x, dst_y, width, height);
+  GPU_HW::CopyVRAM(src_x, src_y, dst_x, dst_y, width, height, params);
 
   src_x *= m_resolution_scale;
   src_y *= m_resolution_scale;
@@ -841,7 +836,7 @@ void GPU_HW_D3D11::CopyVRAM(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 widt
 
 void GPU_HW_D3D11::UpdateVRAMReadTexture()
 {
-  const auto scaled_rect = m_vram_dirty_rect * m_resolution_scale;
+  const Common::Rectangle<u32> scaled_rect(ScaleVRAMRect(m_vram_dirty_rect));
   const CD3D11_BOX src_box(scaled_rect.left, scaled_rect.top, 0, scaled_rect.right, scaled_rect.bottom, 1);
   m_context->CopySubresourceRegion(m_vram_read_texture, 0, scaled_rect.left, scaled_rect.top, 0, m_vram_texture, 0,
                                    &src_box);
@@ -864,7 +859,3 @@ void GPU_HW_D3D11::UpdateDepthBufferFromMaskBit()
   RestoreGraphicsAPIState();
 }
 
-std::unique_ptr<GPU> GPU::CreateHardwareD3D11Renderer()
-{
-  return std::make_unique<GPU_HW_D3D11>();
-}

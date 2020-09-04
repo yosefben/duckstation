@@ -60,7 +60,9 @@
     <ClCompile Include="cpu_recompiler_register_cache.cpp" />
     <ClCompile Include="cpu_types.cpp" />
     <ClCompile Include="digital_controller.cpp" />
+    <ClCompile Include="gpu_backend.cpp" />
     <ClCompile Include="gpu_commands.cpp" />
+    <ClCompile Include="gpu_hw.cpp" />
     <ClCompile Include="gpu_hw_d3d11.cpp" />
     <ClCompile Include="gpu_hw_shadergen.cpp" />
     <ClCompile Include="gpu_hw_vulkan.cpp" />
@@ -68,7 +70,6 @@
     <ClCompile Include="gte.cpp" />
     <ClCompile Include="dma.cpp" />
     <ClCompile Include="gpu.cpp" />
-    <ClCompile Include="gpu_hw.cpp" />
     <ClCompile Include="gpu_hw_opengl.cpp" />
     <ClCompile Include="host_display.cpp" />
     <ClCompile Include="host_interface.cpp" />
@@ -109,6 +110,9 @@
     <ClInclude Include="cpu_recompiler_thunks.h" />
     <ClInclude Include="cpu_recompiler_types.h" />
     <ClInclude Include="digital_controller.h" />
+    <ClInclude Include="gpu_backend.h" />
+    <ClInclude Include="gpu_types.h" />
+    <ClInclude Include="gpu_hw.h" />
     <ClInclude Include="gpu_hw_d3d11.h" />
     <ClInclude Include="gpu_hw_shadergen.h" />
     <ClInclude Include="gpu_hw_vulkan.h" />
@@ -117,7 +121,6 @@
     <ClInclude Include="cpu_types.h" />
     <ClInclude Include="dma.h" />
     <ClInclude Include="gpu.h" />
-    <ClInclude Include="gpu_hw.h" />
     <ClInclude Include="gpu_hw_opengl.h" />
     <ClInclude Include="gte_types.h" />
     <ClInclude Include="host_display.h" />

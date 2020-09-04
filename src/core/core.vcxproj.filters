@@ -8,7 +8,6 @@
     <ClCompile Include="dma.cpp" />
     <ClCompile Include="gpu.cpp" />
     <ClCompile Include="gpu_hw_opengl.cpp" />
-    <ClCompile Include="gpu_hw.cpp" />
     <ClCompile Include="host_interface.cpp" />
     <ClCompile Include="interrupt_controller.cpp" />
     <ClCompile Include="cdrom.cpp" />
@@ -49,6 +48,8 @@
     <ClCompile Include="cheats.cpp" />
     <ClCompile Include="shadergen.cpp" />
     <ClCompile Include="memory_card_image.cpp" />
+    <ClCompile Include="gpu_backend.cpp" />
+    <ClCompile Include="gpu_hw.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="types.h" />
@@ -61,7 +62,6 @@
     <ClInclude Include="dma.h" />
     <ClInclude Include="gpu.h" />
     <ClInclude Include="gpu_hw_opengl.h" />
-    <ClInclude Include="gpu_hw.h" />
     <ClInclude Include="host_interface.h" />
     <ClInclude Include="interrupt_controller.h" />
     <ClInclude Include="cdrom.h" />
@@ -101,5 +101,8 @@
     <ClInclude Include="cheats.h" />
     <ClInclude Include="shadergen.h" />
     <ClInclude Include="memory_card_image.h" />
+    <ClInclude Include="gpu_backend.h" />
+    <ClInclude Include="gpu_hw.h" />
+    <ClInclude Include="gpu_types.h" />
   </ItemGroup>
 </Project>

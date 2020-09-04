@@ -129,7 +129,6 @@ static void ExecuteImpl()
 {
   CodeBlockKey next_block_key;
 
-  g_state.frame_done = false;
   while (!g_state.frame_done)
   {
     TimingEvents::UpdateCPUDowncount();
@@ -240,7 +239,6 @@ void Execute()
 
 void ExecuteRecompiler()
 {
-  g_state.frame_done = false;
   while (!g_state.frame_done)
   {
     TimingEvents::UpdateCPUDowncount();

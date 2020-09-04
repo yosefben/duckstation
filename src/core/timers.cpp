@@ -194,8 +194,8 @@ u32 Timers::ReadRegister(u32 offset)
       if (timer_index < 2 && cs.external_counting_enabled)
       {
         // timers 0/1 depend on the GPU
-        if (timer_index == 0 || g_gpu->IsCRTCScanlinePending())
-          g_gpu->SynchronizeCRTC();
+        if (timer_index == 0 || g_gpu.IsCRTCScanlinePending())
+          g_gpu.SynchronizeCRTC();
       }
 
       m_sysclk_event->InvokeEarly();
@@ -208,8 +208,8 @@ u32 Timers::ReadRegister(u32 offset)
       if (timer_index < 2 && cs.external_counting_enabled)
       {
         // timers 0/1 depend on the GPU
-        if (timer_index == 0 || g_gpu->IsCRTCScanlinePending())
-          g_gpu->SynchronizeCRTC();
+        if (timer_index == 0 || g_gpu.IsCRTCScanlinePending())
+          g_gpu.SynchronizeCRTC();
       }
 
       m_sysclk_event->InvokeEarly();
@@ -244,8 +244,8 @@ void Timers::WriteRegister(u32 offset, u32 value)
   if (timer_index < 2 && cs.external_counting_enabled)
   {
     // timers 0/1 depend on the GPU
-    if (timer_index == 0 || g_gpu->IsCRTCScanlinePending())
-      g_gpu->SynchronizeCRTC();
+    if (timer_index == 0 || g_gpu.IsCRTCScanlinePending())
+      g_gpu.SynchronizeCRTC();
   }
 
   m_sysclk_event->InvokeEarly();

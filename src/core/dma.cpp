@@ -449,17 +449,17 @@ TickCount DMA::TransferMemoryToDevice(Channel channel, u32 address, u32 incremen
   {
     case Channel::GPU:
     {
-      if (g_gpu->BeginDMAWrite())
+      if (g_gpu.BeginDMAWrite())
       {
         u8* ram_pointer = Bus::g_ram;
         for (u32 i = 0; i < word_count; i++)
         {
           u32 value;
           std::memcpy(&value, &ram_pointer[address], sizeof(u32));
-          g_gpu->DMAWrite(address, value);
+          g_gpu.DMAWrite(address, value);
           address = (address + increment) & ADDRESS_MASK;
         }
-        g_gpu->EndDMAWrite();
+        g_gpu.EndDMAWrite();
       }
     }
     break;
@@ -516,7 +516,7 @@ TickCount DMA::TransferDeviceToMemory(Channel channel, u32 address, u32 incremen
   switch (channel)
   {
     case Channel::GPU:
-      g_gpu->DMARead(dest_pointer, word_count);
+      g_gpu.DMARead(dest_pointer, word_count);
       break;
 
     case Channel::CDROM:

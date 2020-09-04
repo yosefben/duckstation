@@ -6,16 +6,29 @@
 #include <algorithm>
 Log_SetChannel(GPU_SW);
 
+static constexpr std::tuple<u8, u8> UnpackTexcoord(u16 texcoord)
+{
+  return std::make_tuple(static_cast<u8>(texcoord), static_cast<u8>(texcoord >> 8));
+}
+
+static constexpr std::tuple<u8, u8, u8> UnpackColorRGB24(u32 rgb24)
+{
+  return std::make_tuple(static_cast<u8>(rgb24), static_cast<u8>(rgb24 >> 8), static_cast<u8>(rgb24 >> 16));
+}
+static constexpr u32 PackColorRGB24(u8 r, u8 g, u8 b)
+{
+  return ZeroExtend32(r) | (ZeroExtend32(g) << 8) | (ZeroExtend32(b) << 16);
+}
+
 GPU_SW::GPU_SW()
 {
   m_vram.fill(0);
-  m_vram_ptr = m_vram.data();
 }
 
 GPU_SW::~GPU_SW()
 {
-  if (m_host_display)
-    m_host_display->ClearDisplayTexture();
+  if (g_host_interface->GetDisplay())
+    g_host_interface->GetDisplay()->ClearDisplayTexture();
 }
 
 bool GPU_SW::IsHardwareRenderer() const
@@ -23,21 +36,22 @@ bool GPU_SW::IsHardwareRenderer() const
   return false;
 }
 
-bool GPU_SW::Initialize(HostDisplay* host_display)
+bool GPU_SW::Initialize()
 {
-  if (!GPU::Initialize(host_display))
+  if (!GPUBackend::Initialize())
     return false;
 
-  m_display_texture = host_display->CreateTexture(VRAM_WIDTH, VRAM_HEIGHT, nullptr, 0, true);
+  m_display_texture = g_host_interface->GetDisplay()->CreateTexture(VRAM_WIDTH, VRAM_HEIGHT, nullptr, 0, true);
   if (!m_display_texture)
     return false;
 
+  m_vram_ptr = m_vram.data();
   return true;
 }
 
 void GPU_SW::Reset()
 {
-  GPU::Reset();
+  GPUBackend::Reset();
 
   m_vram.fill(0);
 }
@@ -151,211 +165,122 @@ void GPU_SW::UpdateDisplay()
   // fill display texture
   m_display_texture_buffer.resize(VRAM_WIDTH * VRAM_HEIGHT);
 
+  HostDisplay* display = g_host_interface->GetDisplay();
+
   if (!g_settings.debugging.show_vram)
   {
-    if (IsDisplayDisabled())
+    if (!m_display_enabled)
     {
-      m_host_display->ClearDisplayTexture();
+      display->ClearDisplayTexture();
       return;
     }
 
-    const u32 vram_offset_y = m_crtc_state.display_vram_top;
-    const u32 display_width = m_crtc_state.display_vram_width;
-    const u32 display_height = m_crtc_state.display_vram_height;
-    const u32 texture_offset_x = m_crtc_state.display_vram_left - m_crtc_state.regs.X;
-    if (IsInterlacedDisplayEnabled())
+    const u32 vram_offset_x = m_display_vram_left;
+    const u32 vram_offset_y = m_display_vram_top;
+    const u32 display_width = m_display_vram_width;
+    const u32 display_height = m_display_vram_height;
+    const u32 texture_offset_x = m_display_vram_left - m_display_vram_start_x;
+    if (m_display_interlace != GPUInterlacedDisplayMode::None)
     {
-      const u32 field = GetInterlacedDisplayField();
-      if (m_GPUSTAT.display_area_color_depth_24)
+      const u32 field = m_display_interlace_field;
+      const bool interleaved = (m_display_interlace == GPUInterlacedDisplayMode::InterleavedFields);
+      if (m_display_24bit)
       {
-        CopyOut24Bit(m_crtc_state.regs.X, vram_offset_y + field, m_display_texture_buffer.data() + field * VRAM_WIDTH,
-                     VRAM_WIDTH, display_width + texture_offset_x, display_height, true, m_GPUSTAT.vertical_resolution);
+        CopyOut24Bit(m_display_vram_start_x, vram_offset_y + field,
+                     m_display_texture_buffer.data() + field * VRAM_WIDTH, VRAM_WIDTH, display_width + texture_offset_x,
+                     display_height, true, interleaved);
       }
       else
       {
-        CopyOut15Bit(m_crtc_state.regs.X, vram_offset_y + field, m_display_texture_buffer.data() + field * VRAM_WIDTH,
-                     VRAM_WIDTH, display_width + texture_offset_x, display_height, true, m_GPUSTAT.vertical_resolution);
+        CopyOut15Bit(m_display_vram_start_x, vram_offset_y + field,
+                     m_display_texture_buffer.data() + field * VRAM_WIDTH, VRAM_WIDTH, display_width + texture_offset_x,
+                     display_height, true, interleaved);
       }
     }
     else
     {
-      if (m_GPUSTAT.display_area_color_depth_24)
+      if (m_display_24bit)
       {
-        CopyOut24Bit(m_crtc_state.regs.X, vram_offset_y, m_display_texture_buffer.data(), VRAM_WIDTH,
+        CopyOut24Bit(m_display_vram_start_x, vram_offset_y, m_display_texture_buffer.data(), VRAM_WIDTH,
                      display_width + texture_offset_x, display_height, false, false);
       }
       else
       {
-        CopyOut15Bit(m_crtc_state.regs.X, vram_offset_y, m_display_texture_buffer.data(), VRAM_WIDTH,
+        CopyOut15Bit(m_display_vram_start_x, vram_offset_y, m_display_texture_buffer.data(), VRAM_WIDTH,
                      display_width + texture_offset_x, display_height, false, false);
       }
     }
 
-    m_host_display->UpdateTexture(m_display_texture.get(), 0, 0, display_width, display_height,
-                                  m_display_texture_buffer.data(), VRAM_WIDTH * sizeof(u32));
-    m_host_display->SetDisplayTexture(m_display_texture->GetHandle(), VRAM_WIDTH, VRAM_HEIGHT, texture_offset_x, 0,
-                                      display_width, display_height);
-    m_host_display->SetDisplayParameters(m_crtc_state.display_width, m_crtc_state.display_height,
-                                         m_crtc_state.display_origin_left, m_crtc_state.display_origin_top,
-                                         m_crtc_state.display_vram_width, m_crtc_state.display_vram_height,
-                                         m_crtc_state.display_aspect_ratio);
+    display->UpdateTexture(m_display_texture.get(), 0, 0, display_width, display_height,
+                           m_display_texture_buffer.data(), VRAM_WIDTH * sizeof(u32));
+    display->SetDisplayTexture(m_display_texture->GetHandle(), VRAM_WIDTH, VRAM_HEIGHT, texture_offset_x, 0,
+                               display_width, display_height);
+    display->SetDisplayParameters(m_display_width, m_display_height, m_display_origin_left, m_display_origin_top,
+                                  m_display_vram_width, m_display_vram_height, m_display_aspect_ratio);
   }
   else
   {
     CopyOut15Bit(0, 0, m_display_texture_buffer.data(), VRAM_WIDTH, VRAM_WIDTH, VRAM_HEIGHT, false, false);
-    m_host_display->UpdateTexture(m_display_texture.get(), 0, 0, VRAM_WIDTH, VRAM_HEIGHT,
-                                  m_display_texture_buffer.data(), VRAM_WIDTH * sizeof(u32));
-    m_host_display->SetDisplayTexture(m_display_texture->GetHandle(), VRAM_WIDTH, VRAM_HEIGHT, 0, 0, VRAM_WIDTH,
-                                      VRAM_HEIGHT);
-    m_host_display->SetDisplayParameters(VRAM_WIDTH, VRAM_HEIGHT, 0, 0, VRAM_WIDTH, VRAM_HEIGHT,
-                                         static_cast<float>(VRAM_WIDTH) / static_cast<float>(VRAM_HEIGHT));
+    display->UpdateTexture(m_display_texture.get(), 0, 0, VRAM_WIDTH, VRAM_HEIGHT, m_display_texture_buffer.data(),
+                           VRAM_WIDTH * sizeof(u32));
+    display->SetDisplayTexture(m_display_texture->GetHandle(), VRAM_WIDTH, VRAM_HEIGHT, 0, 0, VRAM_WIDTH, VRAM_HEIGHT);
+    display->SetDisplayParameters(VRAM_WIDTH, VRAM_HEIGHT, 0, 0, VRAM_WIDTH, VRAM_HEIGHT,
+                                  static_cast<float>(VRAM_WIDTH) / static_cast<float>(VRAM_HEIGHT));
   }
 }
 
-void GPU_SW::DispatchRenderCommand()
+void GPU_SW::ReadVRAM(u32 x, u32 y, u32 width, u32 height)
 {
-  const RenderCommand rc{m_render_command.bits};
-  const bool dithering_enable = rc.IsDitheringEnabled() && m_GPUSTAT.dither_enable;
+  // no-op
+}
 
-  switch (rc.primitive)
-  {
-    case Primitive::Polygon:
-    {
-      const u32 first_color = rc.color_for_first_vertex;
-      const bool shaded = rc.shading_enable;
-      const bool textured = rc.texture_enable;
+void GPU_SW::FillVRAM(u32 x, u32 y, u32 width, u32 height, u32 color, GPUBackendCommandParameters params)
+{
+  SoftwareFillVRAM(x, y, width, height, color, params);
+}
 
-      const u32 num_vertices = rc.quad_polygon ? 4 : 3;
-      std::array<SWVertex, 4> vertices;
-      for (u32 i = 0; i < num_vertices; i++)
-      {
-        SWVertex& vert = vertices[i];
-        const u32 color_rgb = (shaded && i > 0) ? (FifoPop() & UINT32_C(0x00FFFFFF)) : first_color;
-        vert.color_r = Truncate8(color_rgb);
-        vert.color_g = Truncate8(color_rgb >> 8);
-        vert.color_b = Truncate8(color_rgb >> 16);
+void GPU_SW::UpdateVRAM(u32 x, u32 y, u32 width, u32 height, const void* data, GPUBackendCommandParameters params)
+{
+  SoftwareUpdateVRAM(x, y, width, height, data, params);
+}
 
-        const VertexPosition vp{FifoPop()};
-        vert.x = vp.x;
-        vert.y = vp.y;
+void GPU_SW::CopyVRAM(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32 height,
+                      GPUBackendCommandParameters params)
+{
+  SoftwareCopyVRAM(src_x, src_y, dst_x, dst_y, width, height, params);
+}
 
-        if (textured)
-        {
-          std::tie(vert.texcoord_x, vert.texcoord_y) = UnpackTexcoord(Truncate16(FifoPop()));
-        }
-        else
-        {
-          vert.texcoord_x = 0;
-          vert.texcoord_y = 0;
-        }
-      }
+void GPU_SW::DrawPolygon(const GPUBackendDrawPolygonCommand* cmd)
+{
+  const GPURenderCommand rc{cmd->rc.bits};
+  const bool dithering_enable = rc.IsDitheringEnabled() && cmd->draw_mode.dither_enable;
 
-      if (!IsDrawingAreaIsValid())
-        return;
+  const DrawTriangleFunction DrawFunction = GetDrawTriangleFunction(
+    rc.shading_enable, rc.texture_enable, rc.raw_texture_enable, rc.transparency_enable, dithering_enable);
 
-      const DrawTriangleFunction DrawFunction = GetDrawTriangleFunction(
-        rc.shading_enable, rc.texture_enable, rc.raw_texture_enable, rc.transparency_enable, dithering_enable);
+  (this->*DrawFunction)(cmd, &cmd->vertices[0], &cmd->vertices[1], &cmd->vertices[2]);
+  if (rc.quad_polygon)
+    (this->*DrawFunction)(cmd, &cmd->vertices[2], &cmd->vertices[1], &cmd->vertices[3]);
+}
 
-      (this->*DrawFunction)(&vertices[0], &vertices[1], &vertices[2]);
-      if (num_vertices > 3)
-        (this->*DrawFunction)(&vertices[2], &vertices[1], &vertices[3]);
-    }
-    break;
+void GPU_SW::DrawRectangle(const GPUBackendDrawRectangleCommand* cmd)
+{
+  const GPURenderCommand rc{cmd->rc.bits};
+  const bool dithering_enable = rc.IsDitheringEnabled() && cmd->draw_mode.dither_enable;
 
-    case Primitive::Rectangle:
-    {
-      const auto [r, g, b] = UnpackColorRGB24(rc.color_for_first_vertex);
-      const VertexPosition vp{FifoPop()};
-      const u32 texcoord_and_palette = rc.texture_enable ? FifoPop() : 0;
-      const auto [texcoord_x, texcoord_y] = UnpackTexcoord(Truncate16(texcoord_and_palette));
+  const DrawRectangleFunction DrawFunction =
+    GetDrawRectangleFunction(rc.texture_enable, rc.raw_texture_enable, rc.transparency_enable);
 
-      s32 width;
-      s32 height;
-      switch (rc.rectangle_size)
-      {
-        case DrawRectangleSize::R1x1:
-          width = 1;
-          height = 1;
-          break;
-        case DrawRectangleSize::R8x8:
-          width = 8;
-          height = 8;
-          break;
-        case DrawRectangleSize::R16x16:
-          width = 16;
-          height = 16;
-          break;
-        default:
-        {
-          const u32 width_and_height = FifoPop();
-          width = static_cast<s32>(width_and_height & VRAM_WIDTH_MASK);
-          height = static_cast<s32>((width_and_height >> 16) & VRAM_HEIGHT_MASK);
+  (this->*DrawFunction)(cmd);
+}
 
-          if (width >= MAX_PRIMITIVE_WIDTH || height >= MAX_PRIMITIVE_HEIGHT)
-          {
-            Log_DebugPrintf("Culling too-large rectangle: %d,%d %dx%d", vp.x.GetValue(), vp.y.GetValue(), width,
-                            height);
-            return;
-          }
-        }
-        break;
-      }
+void GPU_SW::DrawLine(const GPUBackendDrawLineCommand* cmd)
+{
+  const DrawLineFunction DrawFunction =
+    GetDrawLineFunction(cmd->rc.shading_enable, cmd->rc.transparency_enable, cmd->IsDitheringEnabled());
 
-      if (!IsDrawingAreaIsValid())
-        return;
-
-      const DrawRectangleFunction DrawFunction =
-        GetDrawRectangleFunction(rc.texture_enable, rc.raw_texture_enable, rc.transparency_enable);
-
-      (this->*DrawFunction)(vp.x, vp.y, width, height, r, g, b, texcoord_x, texcoord_y);
-    }
-    break;
-
-    case Primitive::Line:
-    {
-      const u32 first_color = rc.color_for_first_vertex;
-      const bool shaded = rc.shading_enable;
-
-      const DrawLineFunction DrawFunction = GetDrawLineFunction(shaded, rc.transparency_enable, dithering_enable);
-
-      std::array<SWVertex, 2> vertices = {};
-      u32 buffer_pos = 0;
-
-      // first vertex
-      SWVertex* p0 = &vertices[0];
-      SWVertex* p1 = &vertices[1];
-      p0->SetPosition(VertexPosition{rc.polyline ? m_blit_buffer[buffer_pos++] : Truncate32(FifoPop())});
-      p0->SetColorRGB24(first_color);
-
-      // remaining vertices in line strip
-      const u32 num_vertices = rc.polyline ? GetPolyLineVertexCount() : 2;
-      for (u32 i = 1; i < num_vertices; i++)
-      {
-        if (rc.polyline)
-        {
-          p1->SetColorRGB24(shaded ? (m_blit_buffer[buffer_pos++] & UINT32_C(0x00FFFFFF)) : first_color);
-          p1->SetPosition(VertexPosition{m_blit_buffer[buffer_pos++]});
-        }
-        else
-        {
-          p1->SetColorRGB24(shaded ? (FifoPop() & UINT32_C(0x00FFFFFF)) : first_color);
-          p1->SetPosition(VertexPosition{Truncate32(FifoPop())});
-        }
-
-        // down here because of the FIFO pops
-        if (IsDrawingAreaIsValid())
-          (this->*DrawFunction)(p0, p1);
-
-        // swap p0/p1 so that the last vertex is used as the first for the next line
-        std::swap(p0, p1);
-      }
-    }
-    break;
-
-    default:
-      UnreachableCode();
-      break;
-  }
+  for (u16 i = 1; i < cmd->num_vertices; i++)
+    (this->*DrawFunction)(cmd, &cmd->vertices[i - 1], &cmd->vertices[i]);
 }
 
 enum : u32
@@ -383,7 +308,9 @@ constexpr u8 FixedColorToInt(FixedPointColor r)
   return Truncate8(r >> 12);
 }
 
-bool GPU_SW::IsClockwiseWinding(const SWVertex* v0, const SWVertex* v1, const SWVertex* v2)
+bool GPU_SW::IsClockwiseWinding(const GPUBackendDrawPolygonCommand::Vertex* v0,
+                                const GPUBackendDrawPolygonCommand::Vertex* v1,
+                                const GPUBackendDrawPolygonCommand::Vertex* v2)
 {
   const s32 abx = v1->x - v0->x;
   const s32 aby = v1->y - v0->y;
@@ -407,7 +334,9 @@ static constexpr u8 Interpolate(u8 v0, u8 v1, u8 v2, s32 w0, s32 w1, s32 w2, s32
 
 template<bool shading_enable, bool texture_enable, bool raw_texture_enable, bool transparency_enable,
          bool dithering_enable>
-void GPU_SW::DrawTriangle(const SWVertex* v0, const SWVertex* v1, const SWVertex* v2)
+void GPU_SW::DrawTriangle(const GPUBackendDrawPolygonCommand* cmd, const GPUBackendDrawPolygonCommand::Vertex* v0,
+                          const GPUBackendDrawPolygonCommand::Vertex* v1,
+                          const GPUBackendDrawPolygonCommand::Vertex* v2)
 {
 #define orient2d(ax, ay, bx, by, cx, cy) ((bx - ax) * (cy - ay) - (by - ay) * (cx - ax))
 
@@ -415,12 +344,12 @@ void GPU_SW::DrawTriangle(const SWVertex* v0, const SWVertex* v1, const SWVertex
   if (IsClockwiseWinding(v0, v1, v2))
     std::swap(v1, v2);
 
-  const s32 px0 = v0->x + m_drawing_offset.x;
-  const s32 py0 = v0->y + m_drawing_offset.y;
-  const s32 px1 = v1->x + m_drawing_offset.x;
-  const s32 py1 = v1->y + m_drawing_offset.y;
-  const s32 px2 = v2->x + m_drawing_offset.x;
-  const s32 py2 = v2->y + m_drawing_offset.y;
+  const s32 px0 = v0->x;
+  const s32 py0 = v0->y;
+  const s32 px1 = v1->x;
+  const s32 py1 = v1->y;
+  const s32 px2 = v2->x;
+  const s32 py2 = v2->y;
 
   // Barycentric coordinates at minX/minY corner
   const s32 ws = orient2d(px0, py0, px1, py1, px2, py2);
@@ -434,16 +363,11 @@ void GPU_SW::DrawTriangle(const SWVertex* v0, const SWVertex* v1, const SWVertex
   s32 min_y = std::min(py0, std::min(py1, py2));
   s32 max_y = std::max(py0, std::max(py1, py2));
 
-  // reject triangles which cover the whole vram area
-  if (static_cast<u32>(max_x - min_x) > MAX_PRIMITIVE_WIDTH || static_cast<u32>(max_y - min_y) > MAX_PRIMITIVE_HEIGHT)
-    return;
-
   // clip to drawing area
   min_x = std::clamp(min_x, static_cast<s32>(m_drawing_area.left), static_cast<s32>(m_drawing_area.right));
   max_x = std::clamp(max_x, static_cast<s32>(m_drawing_area.left), static_cast<s32>(m_drawing_area.right));
   min_y = std::clamp(min_y, static_cast<s32>(m_drawing_area.top), static_cast<s32>(m_drawing_area.bottom));
   max_y = std::clamp(max_y, static_cast<s32>(m_drawing_area.top), static_cast<s32>(m_drawing_area.bottom));
-  AddDrawTriangleTicks(max_x - min_x + 1, max_y - min_y + 1, shading_enable, texture_enable, transparency_enable);
 
   // compute per-pixel increments
   const s32 a01 = py0 - py1, b01 = px1 - px0;
@@ -476,17 +400,17 @@ void GPU_SW::DrawTriangle(const SWVertex* v0, const SWVertex* v1, const SWVertex
         const s32 b2 = row_w2;
 
         const u8 r =
-          shading_enable ? Interpolate(v0->color_r, v1->color_r, v2->color_r, b0, b1, b2, ws, half_ws) : v0->color_r;
+          shading_enable ? Interpolate(v0->GetR(), v1->GetR(), v2->GetR(), b0, b1, b2, ws, half_ws) : v0->GetR();
         const u8 g =
-          shading_enable ? Interpolate(v0->color_g, v1->color_g, v2->color_g, b0, b1, b2, ws, half_ws) : v0->color_g;
+          shading_enable ? Interpolate(v0->GetG(), v1->GetG(), v2->GetG(), b0, b1, b2, ws, half_ws) : v0->GetG();
         const u8 b =
-          shading_enable ? Interpolate(v0->color_b, v1->color_b, v2->color_b, b0, b1, b2, ws, half_ws) : v0->color_b;
+          shading_enable ? Interpolate(v0->GetB(), v1->GetB(), v2->GetB(), b0, b1, b2, ws, half_ws) : v0->GetB();
 
-        const u8 texcoord_x = Interpolate(v0->texcoord_x, v1->texcoord_x, v2->texcoord_x, b0, b1, b2, ws, half_ws);
-        const u8 texcoord_y = Interpolate(v0->texcoord_y, v1->texcoord_y, v2->texcoord_y, b0, b1, b2, ws, half_ws);
+        const u8 u = texture_enable ? Interpolate(v0->GetU(), v1->GetU(), v2->GetU(), b0, b1, b2, ws, half_ws) : 0;
+        const u8 v = texture_enable ? Interpolate(v0->GetV(), v1->GetV(), v2->GetV(), b0, b1, b2, ws, half_ws) : 0;
 
         ShadePixel<texture_enable, raw_texture_enable, transparency_enable, dithering_enable>(
-          static_cast<u32>(x), static_cast<u32>(y), r, g, b, texcoord_x, texcoord_y);
+          cmd, static_cast<u32>(x), static_cast<u32>(y), r, g, b, u, v);
       }
 
       row_w0 += a12;
@@ -534,42 +458,31 @@ GPU_SW::DrawTriangleFunction GPU_SW::GetDrawTriangleFunction(bool shading_enable
 }
 
 template<bool texture_enable, bool raw_texture_enable, bool transparency_enable>
-void GPU_SW::DrawRectangle(s32 origin_x, s32 origin_y, u32 width, u32 height, u8 r, u8 g, u8 b, u8 origin_texcoord_x,
-                           u8 origin_texcoord_y)
+void GPU_SW::DrawRectangle(const GPUBackendDrawRectangleCommand* cmd)
 {
-  const s32 start_x = TruncateVertexPosition(m_drawing_offset.x + origin_x);
-  const s32 start_y = TruncateVertexPosition(m_drawing_offset.y + origin_y);
+  const s32 origin_x = cmd->x;
+  const s32 origin_y = cmd->y;
+  const auto [r, g, b] = UnpackColorRGB24(cmd->color);
+  const auto [origin_texcoord_x, origin_texcoord_y] = UnpackTexcoord(cmd->texcoord);
 
+  for (u32 offset_y = 0; offset_y < cmd->height; offset_y++)
   {
-    const u32 clip_left = static_cast<u32>(std::clamp<s32>(start_x, m_drawing_area.left, m_drawing_area.right));
-    const u32 clip_right =
-      static_cast<u32>(std::clamp<s32>(start_x + static_cast<s32>(width), m_drawing_area.left, m_drawing_area.right)) +
-      1u;
-    const u32 clip_top = static_cast<u32>(std::clamp<s32>(start_y, m_drawing_area.top, m_drawing_area.bottom));
-    const u32 clip_bottom =
-      static_cast<u32>(std::clamp<s32>(start_y + static_cast<s32>(height), m_drawing_area.top, m_drawing_area.bottom)) +
-      1u;
-    AddDrawRectangleTicks(clip_right - clip_left, clip_bottom - clip_top, texture_enable, transparency_enable);
-  }
-
-  for (u32 offset_y = 0; offset_y < height; offset_y++)
-  {
-    const s32 y = start_y + static_cast<s32>(offset_y);
+    const s32 y = origin_y + static_cast<s32>(offset_y);
     if (y < static_cast<s32>(m_drawing_area.top) || y > static_cast<s32>(m_drawing_area.bottom))
       continue;
 
     const u8 texcoord_y = Truncate8(ZeroExtend32(origin_texcoord_y) + offset_y);
 
-    for (u32 offset_x = 0; offset_x < width; offset_x++)
+    for (u32 offset_x = 0; offset_x < cmd->width; offset_x++)
     {
-      const s32 x = start_x + static_cast<s32>(offset_x);
+      const s32 x = origin_x + static_cast<s32>(offset_x);
       if (x < static_cast<s32>(m_drawing_area.left) || x > static_cast<s32>(m_drawing_area.right))
         continue;
 
       const u8 texcoord_x = Truncate8(ZeroExtend32(origin_texcoord_x) + offset_x);
 
       ShadePixel<texture_enable, raw_texture_enable, transparency_enable, false>(
-        static_cast<u32>(x), static_cast<u32>(y), r, g, b, texcoord_x, texcoord_y);
+        cmd, static_cast<u32>(x), static_cast<u32>(y), r, g, b, texcoord_x, texcoord_y);
     }
   }
 }
@@ -583,7 +496,7 @@ constexpr GPU_SW::DitherLUT GPU_SW::ComputeDitherLUT()
     {
       for (s32 value = 0; value < DITHER_LUT_SIZE; value++)
       {
-        const s32 dithered_value = (value + DITHER_MATRIX[i][j]) >> 3;
+        const s32 dithered_value = (value + GPU::DITHER_MATRIX[i][j]) >> 3;
         lut[i][j][value] = static_cast<u8>((dithered_value < 0) ? 0 : ((dithered_value > 31) ? 31 : dithered_value));
       }
     }
@@ -594,7 +507,8 @@ constexpr GPU_SW::DitherLUT GPU_SW::ComputeDitherLUT()
 static constexpr GPU_SW::DitherLUT s_dither_lut = GPU_SW::ComputeDitherLUT();
 
 template<bool texture_enable, bool raw_texture_enable, bool transparency_enable, bool dithering_enable>
-void GPU_SW::ShadePixel(u32 x, u32 y, u8 color_r, u8 color_g, u8 color_b, u8 texcoord_x, u8 texcoord_y)
+void GPU_SW::ShadePixel(const GPUBackendDrawCommand* cmd, u32 x, u32 y, u8 color_r, u8 color_g, u8 color_b,
+                        u8 texcoord_x, u8 texcoord_y)
 {
   VRAMPixel color;
   bool transparent;
@@ -602,38 +516,41 @@ void GPU_SW::ShadePixel(u32 x, u32 y, u8 color_r, u8 color_g, u8 color_b, u8 tex
   {
     // Apply texture window
     // TODO: Precompute the second half
-    texcoord_x = (texcoord_x & ~(m_draw_mode.texture_window_mask_x * 8u)) |
-                 ((m_draw_mode.texture_window_offset_x & m_draw_mode.texture_window_mask_x) * 8u);
-    texcoord_y = (texcoord_y & ~(m_draw_mode.texture_window_mask_y * 8u)) |
-                 ((m_draw_mode.texture_window_offset_y & m_draw_mode.texture_window_mask_y) * 8u);
+    texcoord_x = (texcoord_x & ~(cmd->window.mask_x * 8u)) | ((cmd->window.offset_x & cmd->window.mask_x) * 8u);
+    texcoord_y = (texcoord_y & ~(cmd->window.mask_y * 8u)) | ((cmd->window.offset_y & cmd->window.mask_y) * 8u);
 
     VRAMPixel texture_color;
-    switch (m_draw_mode.GetTextureMode())
+    switch (cmd->draw_mode.texture_mode)
     {
-      case GPU::TextureMode::Palette4Bit:
+      case GPUTextureMode::Palette4Bit:
       {
-        const u16 palette_value = GetPixel((m_draw_mode.texture_page_x + ZeroExtend32(texcoord_x / 4)) % VRAM_WIDTH,
-                                           (m_draw_mode.texture_page_y + ZeroExtend32(texcoord_y)) % VRAM_HEIGHT);
+        const u16 palette_value =
+          GetPixel((cmd->draw_mode.GetTexturePageBaseX() + ZeroExtend32(texcoord_x / 4)) % VRAM_WIDTH,
+                   (cmd->draw_mode.GetTexturePageBaseY() + ZeroExtend32(texcoord_y)) % VRAM_HEIGHT);
         const u16 palette_index = (palette_value >> ((texcoord_x % 4) * 4)) & 0x0Fu;
-        texture_color.bits = GetPixel((m_draw_mode.texture_palette_x + ZeroExtend32(palette_index)) % VRAM_WIDTH,
-                                      m_draw_mode.texture_palette_y);
+
+        const u32 px = (cmd->palette.GetXBase() + ZeroExtend32(palette_index)) % VRAM_WIDTH;
+        const u32 py = cmd->palette.GetYBase();
+        texture_color.bits =
+          GetPixel((cmd->palette.GetXBase() + ZeroExtend32(palette_index)) % VRAM_WIDTH, cmd->palette.GetYBase());
       }
       break;
 
-      case GPU::TextureMode::Palette8Bit:
+      case GPUTextureMode::Palette8Bit:
       {
-        const u16 palette_value = GetPixel((m_draw_mode.texture_page_x + ZeroExtend32(texcoord_x / 2)) % VRAM_WIDTH,
-                                           (m_draw_mode.texture_page_y + ZeroExtend32(texcoord_y)) % VRAM_HEIGHT);
+        const u16 palette_value =
+          GetPixel((cmd->draw_mode.GetTexturePageBaseX() + ZeroExtend32(texcoord_x / 2)) % VRAM_WIDTH,
+                   (cmd->draw_mode.GetTexturePageBaseY() + ZeroExtend32(texcoord_y)) % VRAM_HEIGHT);
         const u16 palette_index = (palette_value >> ((texcoord_x % 2) * 8)) & 0xFFu;
-        texture_color.bits = GetPixel((m_draw_mode.texture_palette_x + ZeroExtend32(palette_index)) % VRAM_WIDTH,
-                                      m_draw_mode.texture_palette_y);
+        texture_color.bits =
+          GetPixel((cmd->palette.GetXBase() + ZeroExtend32(palette_index)) % VRAM_WIDTH, cmd->palette.GetYBase());
       }
       break;
 
       default:
       {
-        texture_color.bits = GetPixel((m_draw_mode.texture_page_x + ZeroExtend32(texcoord_x)) % VRAM_WIDTH,
-                                      (m_draw_mode.texture_page_y + ZeroExtend32(texcoord_y)) % VRAM_HEIGHT);
+        texture_color.bits = GetPixel((cmd->draw_mode.GetTexturePageBaseX() + ZeroExtend32(texcoord_x)) % VRAM_WIDTH,
+                                      (cmd->draw_mode.GetTexturePageBaseY() + ZeroExtend32(texcoord_y)) % VRAM_HEIGHT);
       }
       break;
     }
@@ -684,18 +601,18 @@ void GPU_SW::ShadePixel(u32 x, u32 y, u8 color_r, u8 color_g, u8 color_b, u8 tex
   color.Set(func(bg_color.r.GetValue(), color.r.GetValue()), func(bg_color.g.GetValue(), color.g.GetValue()),          \
             func(bg_color.b.GetValue(), color.b.GetValue()), color.c.GetValue())
 
-      switch (m_draw_mode.GetTransparencyMode())
+      switch (cmd->draw_mode.transparency_mode)
       {
-        case GPU::TransparencyMode::HalfBackgroundPlusHalfForeground:
+        case GPUTransparencyMode::HalfBackgroundPlusHalfForeground:
           BLEND_RGB(BLEND_AVERAGE);
           break;
-        case GPU::TransparencyMode::BackgroundPlusForeground:
+        case GPUTransparencyMode::BackgroundPlusForeground:
           BLEND_RGB(BLEND_ADD);
           break;
-        case GPU::TransparencyMode::BackgroundMinusForeground:
+        case GPUTransparencyMode::BackgroundMinusForeground:
           BLEND_RGB(BLEND_SUBTRACT);
           break;
-        case GPU::TransparencyMode::BackgroundPlusQuarterForeground:
+        case GPUTransparencyMode::BackgroundPlusQuarterForeground:
           BLEND_RGB(BLEND_QUARTER);
           break;
         default:
@@ -715,14 +632,14 @@ void GPU_SW::ShadePixel(u32 x, u32 y, u8 color_r, u8 color_g, u8 color_b, u8 tex
     UNREFERENCED_VARIABLE(transparent);
   }
 
-  const u16 mask_and = m_GPUSTAT.GetMaskAND();
+  const u16 mask_and = cmd->params.GetMaskAND();
   if ((bg_color.bits & mask_and) != 0)
     return;
 
-  if (IsInterlacedRenderingEnabled() && GetActiveLineLSB() == (static_cast<u32>(y) & 1u))
+  if (cmd->params.interlaced_rendering && cmd->params.active_line_lsb == (Truncate8(static_cast<u32>(y)) & 1u))
     return;
 
-  SetPixel(static_cast<u32>(x), static_cast<u32>(y), color.bits | m_GPUSTAT.GetMaskOR());
+  SetPixel(static_cast<u32>(x), static_cast<u32>(y), color.bits | cmd->params.GetMaskOR());
 }
 
 constexpr FixedPointCoord GetLineCoordStep(s32 delta, s32 k)
@@ -747,7 +664,8 @@ constexpr FixedPointColor GetLineColorStep(s32 delta, s32 k)
 }
 
 template<bool shading_enable, bool transparency_enable, bool dithering_enable>
-void GPU_SW::DrawLine(const SWVertex* p0, const SWVertex* p1)
+void GPU_SW::DrawLine(const GPUBackendDrawLineCommand* cmd, const GPUBackendDrawLineCommand::Vertex* p0,
+                      const GPUBackendDrawLineCommand::Vertex* p1)
 {
   // Algorithm based on Mednafen.
   if (p0->x > p1->x)
@@ -756,21 +674,6 @@ void GPU_SW::DrawLine(const SWVertex* p0, const SWVertex* p1)
   const s32 dx = p1->x - p0->x;
   const s32 dy = p1->y - p0->y;
   const s32 k = std::max(std::abs(dx), std::abs(dy));
-
-  {
-    // TODO: Move to base class
-    const s32 min_x = std::min(p0->x, p1->x);
-    const s32 max_x = std::max(p0->x, p1->x);
-    const s32 min_y = std::min(p0->y, p1->y);
-    const s32 max_y = std::max(p0->y, p1->y);
-
-    const u32 clip_left = static_cast<u32>(std::clamp<s32>(min_x, m_drawing_area.left, m_drawing_area.left));
-    const u32 clip_right = static_cast<u32>(std::clamp<s32>(max_x, m_drawing_area.left, m_drawing_area.right)) + 1u;
-    const u32 clip_top = static_cast<u32>(std::clamp<s32>(min_y, m_drawing_area.top, m_drawing_area.bottom));
-    const u32 clip_bottom = static_cast<u32>(std::clamp<s32>(max_y, m_drawing_area.top, m_drawing_area.bottom)) + 1u;
-
-    AddDrawLineTicks(clip_right - clip_left, clip_bottom - clip_top, shading_enable);
-  }
 
   FixedPointCoord step_x, step_y;
   FixedPointColor step_r, step_g, step_b;
@@ -781,9 +684,9 @@ void GPU_SW::DrawLine(const SWVertex* p0, const SWVertex* p1)
 
     if constexpr (shading_enable)
     {
-      step_r = GetLineColorStep(s32(ZeroExtend32(p1->color_r)) - s32(ZeroExtend32(p0->color_r)), k);
-      step_g = GetLineColorStep(s32(ZeroExtend32(p1->color_g)) - s32(ZeroExtend32(p0->color_g)), k);
-      step_b = GetLineColorStep(s32(ZeroExtend32(p1->color_b)) - s32(ZeroExtend32(p0->color_b)), k);
+      step_r = GetLineColorStep(s32(ZeroExtend32(p1->GetR())) - s32(ZeroExtend32(p0->GetR())), k);
+      step_g = GetLineColorStep(s32(ZeroExtend32(p1->GetG())) - s32(ZeroExtend32(p0->GetG())), k);
+      step_b = GetLineColorStep(s32(ZeroExtend32(p1->GetB())) - s32(ZeroExtend32(p0->GetB())), k);
     }
     else
     {
@@ -803,24 +706,25 @@ void GPU_SW::DrawLine(const SWVertex* p0, const SWVertex* p1)
 
   FixedPointCoord current_x = IntToFixedCoord(p0->x);
   FixedPointCoord current_y = IntToFixedCoord(p0->y);
-  FixedPointColor current_r = IntToFixedColor(p0->color_r);
-  FixedPointColor current_g = IntToFixedColor(p0->color_g);
-  FixedPointColor current_b = IntToFixedColor(p0->color_b);
+  FixedPointColor current_r = IntToFixedColor(p0->GetR());
+  FixedPointColor current_g = IntToFixedColor(p0->GetG());
+  FixedPointColor current_b = IntToFixedColor(p0->GetB());
 
   for (s32 i = 0; i <= k; i++)
   {
-    const s32 x = m_drawing_offset.x + FixedToIntCoord(current_x);
-    const s32 y = m_drawing_offset.y + FixedToIntCoord(current_y);
+    // FIXME: Draw offset should be applied here
+    const s32 x = /*m_drawing_offset.x + */ FixedToIntCoord(current_x);
+    const s32 y = /*m_drawing_offset.y + */ FixedToIntCoord(current_y);
 
-    const u8 r = shading_enable ? FixedColorToInt(current_r) : p0->color_r;
-    const u8 g = shading_enable ? FixedColorToInt(current_g) : p0->color_g;
-    const u8 b = shading_enable ? FixedColorToInt(current_b) : p0->color_b;
+    const u8 r = shading_enable ? FixedColorToInt(current_r) : p0->GetR();
+    const u8 g = shading_enable ? FixedColorToInt(current_g) : p0->GetG();
+    const u8 b = shading_enable ? FixedColorToInt(current_b) : p0->GetB();
 
     if (x >= static_cast<s32>(m_drawing_area.left) && x <= static_cast<s32>(m_drawing_area.right) &&
         y >= static_cast<s32>(m_drawing_area.top) && y <= static_cast<s32>(m_drawing_area.bottom))
     {
-      ShadePixel<false, false, transparency_enable, dithering_enable>(static_cast<u32>(x), static_cast<u32>(y), r, g, b,
-                                                                      0, 0);
+      ShadePixel<false, false, transparency_enable, dithering_enable>(cmd, static_cast<u32>(x), static_cast<u32>(y), r,
+                                                                      g, b, 0, 0);
     }
 
     current_x += step_x;
@@ -863,7 +767,7 @@ GPU_SW::DrawRectangleFunction GPU_SW::GetDrawRectangleFunction(bool texture_enab
   return funcs[u8(texture_enable)][u8(raw_texture_enable)][u8(transparency_enable)];
 }
 
-std::unique_ptr<GPU> GPU::CreateSoftwareRenderer()
+void GPU_SW::FlushRender()
 {
-  return std::make_unique<GPU_SW>();
+  // no-op
 }

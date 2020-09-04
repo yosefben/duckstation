@@ -4,6 +4,7 @@
 #include "common/log.h"
 #include "common/state_wrapper.h"
 #include "dma.h"
+#include "gpu_backend.h"
 #include "host_display.h"
 #include "host_interface.h"
 #include "interrupt_controller.h"
@@ -16,7 +17,7 @@
 #endif
 Log_SetChannel(GPU);
 
-std::unique_ptr<GPU> g_gpu;
+GPU g_gpu;
 
 const GPU::GP0CommandHandlerTable GPU::s_GP0_command_handler_table = GPU::GenerateGP0CommandHandlerTable();
 
@@ -24,9 +25,8 @@ GPU::GPU() = default;
 
 GPU::~GPU() = default;
 
-bool GPU::Initialize(HostDisplay* host_display)
+void GPU::Initialize()
 {
-  m_host_display = host_display;
   m_force_progressive_scan = g_settings.gpu_disable_interlacing;
   m_force_ntsc_timings = g_settings.gpu_force_ntsc_timings;
   m_crtc_state.display_aspect_ratio = Settings::GetDisplayAspectRatioValue(g_settings.display_aspect_ratio);
@@ -38,7 +38,14 @@ bool GPU::Initialize(HostDisplay* host_display)
   m_max_run_ahead = g_settings.gpu_max_run_ahead;
   m_console_is_pal = System::IsPALRegion();
   UpdateCRTCConfig();
-  return true;
+}
+
+void GPU::Shutdown()
+{
+  m_command_tick_event.reset();
+  m_crtc_tick_event.reset();
+  m_fifo.Clear();
+  std::vector<u32>().swap(m_blit_buffer);
 }
 
 void GPU::UpdateSettings()
@@ -58,13 +65,8 @@ void GPU::UpdateSettings()
 
   // Crop mode calls this, so recalculate the display area
   UpdateCRTCDisplayParameters();
-}
 
-void GPU::UpdateResolutionScale() {}
-
-std::tuple<u32, u32> GPU::GetEffectiveDisplayResolution()
-{
-  return std::tie(m_crtc_state.display_vram_width, m_crtc_state.display_vram_height);
+  g_gpu_backend->PushCommand(g_gpu_backend->NewUpdateSettingsCommand());
 }
 
 void GPU::Reset()
@@ -72,6 +74,8 @@ void GPU::Reset()
   SoftReset();
   m_set_texture_disable_mask = false;
   m_GPUREAD_latch = 0;
+
+  g_gpu_backend->PushCommand(g_gpu_backend->NewResetCommand());
 }
 
 void GPU::SoftReset()
@@ -81,7 +85,7 @@ void GPU::SoftReset()
   m_GPUSTAT.bits = 0x14802000;
   m_GPUSTAT.pal_mode = System::IsPALRegion();
   m_drawing_area.Set(0, 0, 0, 0);
-  m_drawing_area_changed = true;
+  UpdateDrawingArea();
   m_drawing_offset = {};
   std::memset(&m_crtc_state.regs, 0, sizeof(m_crtc_state.regs));
   m_crtc_state.regs.horizontal_display_range = 0xC60260;
@@ -98,9 +102,8 @@ void GPU::SoftReset()
   m_fifo.Clear();
   m_blit_buffer.clear();
   m_blit_remaining_words = 0;
-  SetDrawMode(0);
-  SetTexturePalette(0);
-  SetTextureWindow(0);
+  m_draw_mode.bits = 0;
+  m_texture_window.bits = 0;
   UpdateDMARequest();
   UpdateCRTCConfig();
   UpdateCRTCTickEvent();
@@ -117,27 +120,14 @@ bool GPU::DoState(StateWrapper& sw)
 
   sw.Do(&m_GPUSTAT.bits);
 
-  sw.Do(&m_draw_mode.mode_reg.bits);
-  sw.Do(&m_draw_mode.palette_reg);
-  sw.Do(&m_draw_mode.texture_window_value);
-  sw.Do(&m_draw_mode.texture_page_x);
-  sw.Do(&m_draw_mode.texture_page_y);
-  sw.Do(&m_draw_mode.texture_palette_x);
-  sw.Do(&m_draw_mode.texture_palette_y);
-  sw.Do(&m_draw_mode.texture_window_mask_x);
-  sw.Do(&m_draw_mode.texture_window_mask_y);
-  sw.Do(&m_draw_mode.texture_window_offset_x);
-  sw.Do(&m_draw_mode.texture_window_offset_y);
-  sw.Do(&m_draw_mode.texture_x_flip);
-  sw.Do(&m_draw_mode.texture_y_flip);
-
+  sw.Do(&m_drawing_offset.x);
+  sw.Do(&m_drawing_offset.y);
   sw.Do(&m_drawing_area.left);
   sw.Do(&m_drawing_area.top);
   sw.Do(&m_drawing_area.right);
   sw.Do(&m_drawing_area.bottom);
-  sw.Do(&m_drawing_offset.x);
-  sw.Do(&m_drawing_offset.y);
-  sw.Do(&m_drawing_offset.x);
+  sw.Do(&m_draw_mode.bits);
+  sw.Do(&m_texture_window.bits);
 
   sw.Do(&m_console_is_pal);
   sw.Do(&m_set_texture_disable_mask);
@@ -195,9 +185,7 @@ bool GPU::DoState(StateWrapper& sw)
 
   if (sw.IsReading())
   {
-    m_draw_mode.texture_page_changed = true;
-    m_draw_mode.texture_window_changed = true;
-    m_drawing_area_changed = true;
+    UpdateDrawingArea();
     UpdateDMARequest();
   }
 
@@ -206,36 +194,14 @@ bool GPU::DoState(StateWrapper& sw)
 
   if (sw.IsReading())
   {
-    // Need to clear the mask bits since we want to pull it in from the copy.
-    const u32 old_GPUSTAT = m_GPUSTAT.bits;
-    m_GPUSTAT.check_mask_before_draw = false;
-    m_GPUSTAT.set_mask_while_drawing = false;
-
-    // Still need a temporary here.
-    HeapArray<u16, VRAM_WIDTH * VRAM_HEIGHT> temp;
-    sw.DoBytes(temp.data(), VRAM_WIDTH * VRAM_HEIGHT * sizeof(u16));
-    UpdateVRAM(0, 0, VRAM_WIDTH, VRAM_HEIGHT, temp.data());
-
-    // Restore mask setting.
-    m_GPUSTAT.bits = old_GPUSTAT;
-
     UpdateCRTCConfig();
     UpdateDisplay();
     UpdateCRTCTickEvent();
     UpdateCommandTickEvent();
   }
-  else
-  {
-    ReadVRAM(0, 0, VRAM_WIDTH, VRAM_HEIGHT);
-    sw.DoBytes(m_vram_ptr, VRAM_WIDTH * VRAM_HEIGHT * sizeof(u16));
-  }
 
   return !sw.HasError();
 }
-
-void GPU::ResetGraphicsAPIState() {}
-
-void GPU::RestoreGraphicsAPIState() {}
 
 void GPU::UpdateDMARequest()
 {
@@ -818,9 +784,9 @@ void GPU::UpdateCommandTickEvent()
 
 bool GPU::ConvertScreenCoordinatesToBeamTicksAndLines(s32 window_x, s32 window_y, u32* out_tick, u32* out_line) const
 {
-  const auto [display_x, display_y] = m_host_display->ConvertWindowCoordinatesToDisplayCoordinates(
-    window_x, window_y, m_host_display->GetWindowWidth(), m_host_display->GetWindowHeight(),
-    m_host_display->GetDisplayTopMargin());
+  HostDisplay* display = g_host_interface->GetDisplay();
+  const auto [display_x, display_y] = display->ConvertWindowCoordinatesToDisplayCoordinates(
+    window_x, window_y, display->GetWindowWidth(), display->GetWindowHeight(), display->GetDisplayTopMargin());
   Log_DebugPrintf("win %d,%d -> disp %d,%d (size %u,%u frac %f,%f)", window_x, window_y, display_x, display_y,
                   m_crtc_state.display_width, m_crtc_state.display_height,
                   static_cast<float>(display_x) / static_cast<float>(m_crtc_state.display_width),
@@ -850,7 +816,7 @@ u32 GPU::ReadGPUREAD()
     // Read with correct wrap-around behavior.
     const u16 read_x = (m_vram_transfer.x + m_vram_transfer.col) % VRAM_WIDTH;
     const u16 read_y = (m_vram_transfer.y + m_vram_transfer.row) % VRAM_HEIGHT;
-    value |= ZeroExtend32(m_vram_ptr[read_y * VRAM_WIDTH + read_x]) << (i * 16);
+    value |= ZeroExtend32(g_gpu_backend->GetVRAM()[read_y * VRAM_WIDTH + read_x]) << (i * 16);
 
     if (++m_vram_transfer.col == m_vram_transfer.width)
     {
@@ -1064,7 +1030,7 @@ void GPU::HandleGetGPUInfoCommand(u32 value)
     case 0x02: // Get Texture Window
     {
       Log_DebugPrintf("Get texture window");
-      m_GPUREAD_latch = m_draw_mode.texture_window_value;
+      m_GPUREAD_latch = m_texture_window.bits;
     }
     break;
 
@@ -1096,227 +1062,6 @@ void GPU::HandleGetGPUInfoCommand(u32 value)
       Log_WarningPrintf("Unhandled GetGPUInfo(0x%02X)", ZeroExtend32(subcommand));
       break;
   }
-}
-
-void GPU::ClearDisplay() {}
-
-void GPU::UpdateDisplay() {}
-
-void GPU::ReadVRAM(u32 x, u32 y, u32 width, u32 height) {}
-
-void GPU::FillVRAM(u32 x, u32 y, u32 width, u32 height, u32 color)
-{
-  const u16 color16 = RGBA8888ToRGBA5551(color);
-  if ((x + width) <= VRAM_WIDTH && !IsInterlacedRenderingEnabled())
-  {
-    for (u32 yoffs = 0; yoffs < height; yoffs++)
-    {
-      const u32 row = (y + yoffs) % VRAM_HEIGHT;
-      std::fill_n(&m_vram_ptr[row * VRAM_WIDTH + x], width, color16);
-    }
-  }
-  else if (IsInterlacedRenderingEnabled())
-  {
-    // Hardware tests show that fills seem to break on the first two lines when the offset matches the displayed field.
-    if (IsCRTCScanlinePending())
-      SynchronizeCRTC();
-
-    const u32 active_field = GetActiveLineLSB();
-    for (u32 yoffs = 0; yoffs < height; yoffs++)
-    {
-      const u32 row = (y + yoffs) % VRAM_HEIGHT;
-      if ((row & u32(1)) == active_field)
-        continue;
-
-      u16* row_ptr = &m_vram_ptr[row * VRAM_WIDTH];
-      for (u32 xoffs = 0; xoffs < width; xoffs++)
-      {
-        const u32 col = (x + xoffs) % VRAM_WIDTH;
-        row_ptr[col] = color16;
-      }
-    }
-  }
-  else
-  {
-    for (u32 yoffs = 0; yoffs < height; yoffs++)
-    {
-      const u32 row = (y + yoffs) % VRAM_HEIGHT;
-      u16* row_ptr = &m_vram_ptr[row * VRAM_WIDTH];
-      for (u32 xoffs = 0; xoffs < width; xoffs++)
-      {
-        const u32 col = (x + xoffs) % VRAM_WIDTH;
-        row_ptr[col] = color16;
-      }
-    }
-  }
-}
-
-void GPU::UpdateVRAM(u32 x, u32 y, u32 width, u32 height, const void* data)
-{
-  // Fast path when the copy is not oversized.
-  if ((x + width) <= VRAM_WIDTH && (y + height) <= VRAM_HEIGHT && !m_GPUSTAT.IsMaskingEnabled())
-  {
-    const u16* src_ptr = static_cast<const u16*>(data);
-    u16* dst_ptr = &m_vram_ptr[y * VRAM_WIDTH + x];
-    for (u32 yoffs = 0; yoffs < height; yoffs++)
-    {
-      std::copy_n(src_ptr, width, dst_ptr);
-      src_ptr += width;
-      dst_ptr += VRAM_WIDTH;
-    }
-  }
-  else
-  {
-    // Slow path when we need to handle wrap-around.
-    const u16* src_ptr = static_cast<const u16*>(data);
-    const u16 mask_and = m_GPUSTAT.GetMaskAND();
-    const u16 mask_or = m_GPUSTAT.GetMaskOR();
-
-    for (u32 row = 0; row < height;)
-    {
-      u16* dst_row_ptr = &m_vram_ptr[((y + row++) % VRAM_HEIGHT) * VRAM_WIDTH];
-      for (u32 col = 0; col < width;)
-      {
-        // TODO: Handle unaligned reads...
-        u16* pixel_ptr = &dst_row_ptr[(x + col++) % VRAM_WIDTH];
-        if (((*pixel_ptr) & mask_and) == 0)
-          *pixel_ptr = *(src_ptr++) | mask_or;
-      }
-    }
-  }
-}
-
-void GPU::CopyVRAM(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32 height)
-{
-  // Break up oversized copies. This behavior has not been verified on console.
-  if ((src_x + width) > VRAM_WIDTH || (dst_x + width) > VRAM_WIDTH)
-  {
-    u32 remaining_rows = height;
-    u32 current_src_y = src_y;
-    u32 current_dst_y = dst_y;
-    while (remaining_rows > 0)
-    {
-      const u32 rows_to_copy =
-        std::min<u32>(remaining_rows, std::min<u32>(VRAM_HEIGHT - current_src_y, VRAM_HEIGHT - current_dst_y));
-
-      u32 remaining_columns = width;
-      u32 current_src_x = src_x;
-      u32 current_dst_x = dst_x;
-      while (remaining_columns > 0)
-      {
-        const u32 columns_to_copy =
-          std::min<u32>(remaining_columns, std::min<u32>(VRAM_WIDTH - current_src_x, VRAM_WIDTH - current_dst_x));
-        CopyVRAM(current_src_x, current_src_y, current_dst_x, current_dst_y, columns_to_copy, rows_to_copy);
-        current_src_x = (current_src_x + columns_to_copy) % VRAM_WIDTH;
-        current_dst_x = (current_dst_x + columns_to_copy) % VRAM_WIDTH;
-        remaining_columns -= columns_to_copy;
-      }
-
-      current_src_y = (current_src_y + rows_to_copy) % VRAM_HEIGHT;
-      current_dst_y = (current_dst_y + rows_to_copy) % VRAM_HEIGHT;
-      remaining_rows -= rows_to_copy;
-    }
-
-    return;
-  }
-
-  // This doesn't have a fast path, but do we really need one? It's not common.
-  const u16 mask_and = m_GPUSTAT.GetMaskAND();
-  const u16 mask_or = m_GPUSTAT.GetMaskOR();
-
-  // Copy in reverse when src_x < dst_x, this is verified on console.
-  if (src_x < dst_x || ((src_x + width - 1) % VRAM_WIDTH) < ((dst_x + width - 1) % VRAM_WIDTH))
-  {
-    for (u32 row = 0; row < height; row++)
-    {
-      const u16* src_row_ptr = &m_vram_ptr[((src_y + row) % VRAM_HEIGHT) * VRAM_WIDTH];
-      u16* dst_row_ptr = &m_vram_ptr[((dst_y + row) % VRAM_HEIGHT) * VRAM_WIDTH];
-
-      for (s32 col = static_cast<s32>(width - 1); col >= 0; col--)
-      {
-        const u16 src_pixel = src_row_ptr[(src_x + static_cast<u32>(col)) % VRAM_WIDTH];
-        u16* dst_pixel_ptr = &dst_row_ptr[(dst_x + static_cast<u32>(col)) % VRAM_WIDTH];
-        if ((*dst_pixel_ptr & mask_and) == 0)
-          *dst_pixel_ptr = src_pixel | mask_or;
-      }
-    }
-  }
-  else
-  {
-    for (u32 row = 0; row < height; row++)
-    {
-      const u16* src_row_ptr = &m_vram_ptr[((src_y + row) % VRAM_HEIGHT) * VRAM_WIDTH];
-      u16* dst_row_ptr = &m_vram_ptr[((dst_y + row) % VRAM_HEIGHT) * VRAM_WIDTH];
-
-      for (u32 col = 0; col < width; col++)
-      {
-        const u16 src_pixel = src_row_ptr[(src_x + col) % VRAM_WIDTH];
-        u16* dst_pixel_ptr = &dst_row_ptr[(dst_x + col) % VRAM_WIDTH];
-        if ((*dst_pixel_ptr & mask_and) == 0)
-          *dst_pixel_ptr = src_pixel | mask_or;
-      }
-    }
-  }
-}
-
-void GPU::DispatchRenderCommand() {}
-
-void GPU::FlushRender() {}
-
-void GPU::SetDrawMode(u16 value)
-{
-  DrawMode::Reg new_mode_reg{static_cast<u16>(value & DrawMode::Reg::MASK)};
-  if (!m_set_texture_disable_mask)
-    new_mode_reg.texture_disable = false;
-
-  if (new_mode_reg.bits == m_draw_mode.mode_reg.bits)
-    return;
-
-  if ((new_mode_reg.bits & DrawMode::Reg::TEXTURE_PAGE_MASK) !=
-      (m_draw_mode.mode_reg.bits & DrawMode::Reg::TEXTURE_PAGE_MASK))
-  {
-    m_draw_mode.texture_page_x = new_mode_reg.GetTexturePageXBase();
-    m_draw_mode.texture_page_y = new_mode_reg.GetTexturePageYBase();
-    m_draw_mode.texture_page_changed = true;
-  }
-
-  m_draw_mode.mode_reg.bits = new_mode_reg.bits;
-
-  if (m_GPUSTAT.draw_to_displayed_field != new_mode_reg.draw_to_displayed_field)
-    FlushRender();
-
-  // Bits 0..10 are returned in the GPU status register.
-  m_GPUSTAT.bits =
-    (m_GPUSTAT.bits & ~(DrawMode::Reg::GPUSTAT_MASK)) | (ZeroExtend32(new_mode_reg.bits) & DrawMode::Reg::GPUSTAT_MASK);
-  m_GPUSTAT.texture_disable = m_draw_mode.mode_reg.texture_disable;
-}
-
-void GPU::SetTexturePalette(u16 value)
-{
-  value &= DrawMode::PALETTE_MASK;
-  if (m_draw_mode.palette_reg == value)
-    return;
-
-  m_draw_mode.texture_palette_x = ZeroExtend32(value & 0x3F) * 16;
-  m_draw_mode.texture_palette_y = ZeroExtend32(value >> 6);
-  m_draw_mode.palette_reg = value;
-  m_draw_mode.texture_page_changed = true;
-}
-
-void GPU::SetTextureWindow(u32 value)
-{
-  value &= DrawMode::TEXTURE_WINDOW_MASK;
-  if (m_draw_mode.texture_window_value == value)
-    return;
-
-  FlushRender();
-
-  m_draw_mode.texture_window_mask_x = value & UINT32_C(0x1F);
-  m_draw_mode.texture_window_mask_y = (value >> 5) & UINT32_C(0x1F);
-  m_draw_mode.texture_window_offset_x = (value >> 10) & UINT32_C(0x1F);
-  m_draw_mode.texture_window_offset_y = (value >> 15) & UINT32_C(0x1F);
-  m_draw_mode.texture_window_value = value;
-  m_draw_mode.texture_window_changed = true;
 }
 
 bool GPU::DumpVRAMToFile(const char* filename, u32 width, u32 height, u32 stride, const void* buffer, bool remove_alpha)
@@ -1417,7 +1162,7 @@ void GPU::DrawDebugStateWindow()
     ImGui::Columns(1);
   }
 
-  DrawRendererStats(is_idle_frame);
+  g_gpu_backend->DrawRendererStats(is_idle_frame);
 
   if (ImGui::CollapsingHeader("GPU", ImGuiTreeNodeFlags_DefaultOpen))
   {
@@ -1468,5 +1213,3 @@ void GPU::DrawDebugStateWindow()
   ImGui::End();
 #endif
 }
-
-void GPU::DrawRendererStats(bool is_idle_frame) {}
