@@ -53,6 +53,11 @@ void UpdateCPUDowncount()
     CPU::g_state.downcount = s_active_events_head->GetDowncount();
 }
 
+TimingEvent** GetHeadEventPtr()
+{
+  return &s_active_events_head;
+}
+
 static void SortEvent(TimingEvent* event)
 {
   const TickCount event_downcount = event->m_downcount;

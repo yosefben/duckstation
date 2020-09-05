@@ -1,4 +1,5 @@
 #pragma once
+#include "bus.h"
 #include "common/bitfield.h"
 #include "common/jit_code_buffer.h"
 #include "cpu_types.h"
@@ -8,6 +9,13 @@
 #include <vector>
 
 namespace CPU {
+
+enum : u32
+{
+  FAST_MAP_RAM_SLOT_COUNT = Bus::RAM_SIZE / 4,
+  FAST_MAP_BIOS_SLOT_COUNT = Bus::BIOS_SIZE / 4,
+  FAST_MAP_TOTAL_SLOT_COUNT = FAST_MAP_RAM_SLOT_COUNT + FAST_MAP_BIOS_SLOT_COUNT,
+};
 
 union CodeBlockKey
 {
@@ -86,6 +94,7 @@ void Shutdown();
 void Execute();
 
 #ifdef WITH_RECOMPILER
+CodeBlock::HostCodePointer* GetFastMapPointer();
 void ExecuteRecompiler();
 #endif
 
@@ -101,6 +110,18 @@ void InvalidateBlocksWithPageIndex(u32 page_index);
 template<PGXPMode pgxp_mode>
 void InterpretCachedBlock(const CodeBlock& block);
 void InterpretUncachedBlock();
+
+/// Invalidates any code pages which overlap the specified range.
+ALWAYS_INLINE void InvalidateCodePages(PhysicalMemoryAddress address, u32 word_count)
+{
+  const u32 start_page = address / CPU_CODE_CACHE_PAGE_SIZE;
+  const u32 end_page = (address + word_count * sizeof(u32)) / CPU_CODE_CACHE_PAGE_SIZE;
+  for (u32 page = start_page; page <= end_page; page++)
+  {
+    if (Bus::m_ram_code_bits[page])
+      CPU::CodeCache::InvalidateBlocksWithPageIndex(page);
+  }
+}
 
 }; // namespace CodeCache
 
