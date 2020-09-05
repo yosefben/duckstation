@@ -25,6 +25,8 @@ public:
 
   bool CompileBlock(const CodeBlock* block, CodeBlock::HostCodePointer* out_host_code, u32* out_host_code_size);
 
+  CodeBlock::HostCodePointer CompileDispatcher();
+
   //////////////////////////////////////////////////////////////////////////
   // Code Generation
   //////////////////////////////////////////////////////////////////////////
@@ -67,6 +69,7 @@ public:
   void EmitAddCPUStructField(u32 offset, const Value& value);
   void EmitLoadGlobal(HostReg host_reg, RegSize size, const void* ptr);
   void EmitStoreGlobal(void* ptr, const Value& value);
+  void EmitLoadGlobalAddress(HostReg host_reg, const void* ptr);
 
   // Automatically generates an exception handler.
   Value EmitLoadGuestMemory(const CodeBlockInstruction& cbi, const Value& address, RegSize size);
