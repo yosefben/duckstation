@@ -351,6 +351,33 @@ u32 RegisterCache::PopCalleeSavedRegisters(bool commit)
   return count;
 }
 
+void RegisterCache::ReserveCallerSavedRegisters()
+{
+  for (u32 reg = 0; reg < HostReg_Count; reg++)
+  {
+    if ((m_state.host_reg_state[reg] & (HostRegState::CalleeSaved | HostRegState::CalleeSavedAllocated)) ==
+        HostRegState::CalleeSaved)
+    {
+      DebugAssert(m_state.callee_saved_order_count < HostReg_Count);
+      m_code_generator.EmitPushHostReg(static_cast<HostReg>(reg), GetActiveCalleeSavedRegisterCount());
+      m_state.callee_saved_order[m_state.callee_saved_order_count++] = static_cast<HostReg>(reg);
+      m_state.host_reg_state[reg] |= HostRegState::CalleeSavedAllocated;
+    }
+  }
+}
+
+void RegisterCache::AssumeCalleeSavedRegistersAreSaved()
+{
+  for (u32 i = 0; i < HostReg_Count; i++)
+  {
+    if ((m_state.host_reg_state[i] & (HostRegState::CalleeSaved | HostRegState::CalleeSavedAllocated)) ==
+        HostRegState::CalleeSaved)
+    {
+      m_state.host_reg_state[i] &= ~HostRegState::CalleeSaved;
+    }
+  }
+}
+
 void RegisterCache::PushState()
 {
   // need to copy this manually because of the load delay values

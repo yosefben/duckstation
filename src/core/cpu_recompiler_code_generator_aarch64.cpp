@@ -6,6 +6,7 @@
 #include "cpu_recompiler_code_generator.h"
 #include "cpu_recompiler_thunks.h"
 #include "settings.h"
+#include "timing_event.h"
 Log_SetChannel(CPU::Recompiler);
 
 namespace a64 = vixl::aarch64;
@@ -25,6 +26,16 @@ constexpr u64 FUNCTION_CALLEE_SAVED_SPACE_RESERVE = 80;  // 8 registers
 constexpr u64 FUNCTION_CALLER_SAVED_SPACE_RESERVE = 144; // 18 registers -> 224 bytes
 constexpr u64 FUNCTION_STACK_SIZE =
   FUNCTION_CALLEE_SAVED_SPACE_RESERVE + FUNCTION_CALLER_SAVED_SPACE_RESERVE + FUNCTION_CALL_SHADOW_SPACE;
+
+// PC we return to after the end of the block
+static void* s_dispatcher_return_address;
+
+static s64 GetPCDisplacement(const void* current, const void* target)
+{
+  Assert(Common::IsAlignedPow2(reinterpret_cast<size_t>(current), 4));
+  Assert(Common::IsAlignedPow2(reinterpret_cast<size_t>(target), 4));
+  return static_cast<s64>((reinterpret_cast<ptrdiff_t>(target) - reinterpret_cast<ptrdiff_t>(current)) >> 2);
+}
 
 static const a64::WRegister GetHostReg8(HostReg reg)
 {
@@ -172,11 +183,11 @@ void CodeGenerator::EmitBeginBlock()
   // Save the link register, since we'll be calling functions.
   const bool link_reg_allocated = m_register_cache.AllocateHostReg(30);
   DebugAssert(link_reg_allocated);
+  m_register_cache.AssumeCalleeSavedRegistersAreSaved();
 
   // Store the CPU struct pointer. TODO: make this better.
   const bool cpu_reg_allocated = m_register_cache.AllocateHostReg(RCPUPTR);
   DebugAssert(cpu_reg_allocated);
-  m_emit->Mov(GetCPUPtrReg(), reinterpret_cast<size_t>(&g_state));
 }
 
 void CodeGenerator::EmitEndBlock()
@@ -185,6 +196,7 @@ void CodeGenerator::EmitEndBlock()
   m_register_cache.PopCalleeSavedRegisters(true);
 
   m_emit->Add(a64::sp, a64::sp, FUNCTION_STACK_SIZE);
+  // m_emit->b(GetPCDisplacement(GetCurrentCodePointer(), s_dispatcher_return_address));
   m_emit->Ret();
 }
 
@@ -200,6 +212,7 @@ void CodeGenerator::EmitExceptionExit()
   m_register_cache.PopCalleeSavedRegisters(false);
 
   m_emit->Add(a64::sp, a64::sp, FUNCTION_STACK_SIZE);
+  // m_emit->b(GetPCDisplacement(GetCurrentCodePointer(), s_dispatcher_return_address));
   m_emit->Ret();
 }
 
@@ -958,13 +971,6 @@ void CodeGenerator::RestoreStackAfterCall(u32 adjust_size)
   m_register_cache.PopCallerSavedRegisters();
 }
 
-static s64 GetBranchDisplacement(const void* current, const void* target)
-{
-  Assert(Common::IsAlignedPow2(reinterpret_cast<size_t>(current), 4));
-  Assert(Common::IsAlignedPow2(reinterpret_cast<size_t>(target), 4));
-  return static_cast<s64>((reinterpret_cast<ptrdiff_t>(target) - reinterpret_cast<ptrdiff_t>(current)) >> 2);
-}
-
 void CodeGenerator::EmitFunctionCallPtr(Value* return_value, const void* ptr)
 {
   if (return_value)
@@ -974,7 +980,7 @@ void CodeGenerator::EmitFunctionCallPtr(Value* return_value, const void* ptr)
   const u32 adjust_size = PrepareStackForCall();
 
   // actually call the function
-  const s64 displacement = GetBranchDisplacement(GetCurrentCodePointer(), ptr);
+  const s64 displacement = GetPCDisplacement(GetCurrentCodePointer(), ptr);
   const bool use_blr = !vixl::IsInt26(displacement);
   if (use_blr)
   {
@@ -1009,7 +1015,7 @@ void CodeGenerator::EmitFunctionCallPtr(Value* return_value, const void* ptr, co
   EmitCopyValue(RARG1, arg1);
 
   // actually call the function
-  const s64 displacement = GetBranchDisplacement(GetCurrentCodePointer(), ptr);
+  const s64 displacement = GetPCDisplacement(GetCurrentCodePointer(), ptr);
   const bool use_blr = !vixl::IsInt26(displacement);
   if (use_blr)
   {
@@ -1045,7 +1051,7 @@ void CodeGenerator::EmitFunctionCallPtr(Value* return_value, const void* ptr, co
   EmitCopyValue(RARG2, arg2);
 
   // actually call the function
-  const s64 displacement = GetBranchDisplacement(GetCurrentCodePointer(), ptr);
+  const s64 displacement = GetPCDisplacement(GetCurrentCodePointer(), ptr);
   const bool use_blr = !vixl::IsInt26(displacement);
   if (use_blr)
   {
@@ -1083,7 +1089,7 @@ void CodeGenerator::EmitFunctionCallPtr(Value* return_value, const void* ptr, co
   EmitCopyValue(RARG3, arg3);
 
   // actually call the function
-  const s64 displacement = GetBranchDisplacement(GetCurrentCodePointer(), ptr);
+  const s64 displacement = GetPCDisplacement(GetCurrentCodePointer(), ptr);
   const bool use_blr = !vixl::IsInt26(displacement);
   if (use_blr)
   {
@@ -1122,7 +1128,7 @@ void CodeGenerator::EmitFunctionCallPtr(Value* return_value, const void* ptr, co
   EmitCopyValue(RARG4, arg4);
 
   // actually call the function
-  const s64 displacement = GetBranchDisplacement(GetCurrentCodePointer(), ptr);
+  const s64 displacement = GetPCDisplacement(GetCurrentCodePointer(), ptr);
   const bool use_blr = !vixl::IsInt26(displacement);
   if (use_blr)
   {
@@ -1510,7 +1516,7 @@ void CodeGenerator::EmitStoreGuestMemory(const CodeBlockInstruction& cbi, const 
 
 void CodeGenerator::EmitLoadGlobal(HostReg host_reg, RegSize size, const void* ptr)
 {
-  m_emit->Mov(GetHostReg64(RSCRATCH), reinterpret_cast<uintptr_t>(ptr));
+  EmitLoadGlobalAddress(RSCRATCH, ptr);
   switch (size)
   {
     case RegSize_8:
@@ -1535,7 +1541,7 @@ void CodeGenerator::EmitStoreGlobal(void* ptr, const Value& value)
 {
   Value value_in_hr = GetValueInHostRegister(value);
 
-  m_emit->Mov(GetHostReg64(RSCRATCH), reinterpret_cast<uintptr_t>(ptr));
+  EmitLoadGlobalAddress(RSCRATCH, ptr);
   switch (value.size)
   {
     case RegSize_8:
@@ -1880,6 +1886,132 @@ void CodeGenerator::EmitBranchIfBitClear(HostReg reg, RegSize size, u8 bit, Labe
 void CodeGenerator::EmitBindLabel(LabelType* label)
 {
   m_emit->Bind(label);
+}
+
+void CodeGenerator::EmitLoadGlobalAddress(HostReg host_reg, const void* ptr)
+{
+  const void* current_code_ptr_page = reinterpret_cast<const void*>(
+    reinterpret_cast<uintptr_t>(GetCurrentCodePointer()) & ~static_cast<uintptr_t>(0xFFF));
+  const void* ptr_page =
+    reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(ptr) & ~static_cast<uintptr_t>(0xFFF));
+  const s64 page_displacement = GetPCDisplacement(current_code_ptr_page, ptr_page) >> 10;
+  const u32 page_offset = static_cast<u32>(reinterpret_cast<uintptr_t>(ptr) & 0xFFFu);
+  if (vixl::IsInt21(page_displacement) && a64::Assembler::IsImmLogical(page_offset, 64))
+  {
+    m_emit->adrp(GetHostReg64(host_reg), page_displacement);
+    m_emit->orr(GetHostReg64(host_reg), GetHostReg64(host_reg), page_offset);
+  }
+  else
+  {
+    m_emit->Mov(GetHostReg64(host_reg), reinterpret_cast<uintptr_t>(ptr));
+  }
+}
+
+CodeBlock::HostCodePointer CodeGenerator::CompileDispatcher()
+{
+  m_emit->Sub(a64::sp, a64::sp, FUNCTION_STACK_SIZE);
+  m_register_cache.ReserveCallerSavedRegisters();
+
+  EmitLoadGlobalAddress(RCPUPTR, &g_state);
+
+  a64::Label frame_done_loop;
+  a64::Label exit_dispatcher;
+  m_emit->Bind(&frame_done_loop);
+
+  // if frame_done goto exit_dispatcher
+  m_emit->ldrb(a64::w8, a64::MemOperand(GetHostReg64(RCPUPTR), offsetof(State, frame_done)));
+  m_emit->tbnz(a64::w8, 0, &exit_dispatcher);
+
+  // x8 <- sr
+  a64::Label no_interrupt;
+  m_emit->ldr(a64::w8, a64::MemOperand(GetHostReg64(RCPUPTR), offsetof(State, cop0_regs.sr.bits)));
+
+  // if Iec == 0 then goto no_interrupt
+  m_emit->tbz(a64::w8, 0, &no_interrupt);
+
+  // x9 <- cause
+  // x8 (sr) & cause
+  m_emit->ldr(a64::w9, a64::MemOperand(GetHostReg64(RCPUPTR), offsetof(State, cop0_regs.cause.bits)));
+  m_emit->and_(a64::w8, a64::w8, a64::w9);
+
+  // ((sr & cause) & 0xff00) == 0 goto no_interrupt
+  m_emit->tst(a64::w8, 0xFF00);
+  m_emit->b(&no_interrupt, a64::eq);
+
+  // we have an interrupt
+  EmitFunctionCall(nullptr, &DispatchInterrupt);
+
+  // no interrupt or we just serviced it
+  m_emit->Bind(&no_interrupt);
+
+  // TimingEvents::UpdateCPUDowncount:
+  // x8 <- head event->downcount
+  // downcount <- x8
+  EmitLoadGlobalAddress(8, TimingEvents::GetHeadEventPtr());
+  m_emit->ldr(a64::x8, a64::MemOperand(a64::x8));
+  m_emit->ldr(a64::w8, a64::MemOperand(a64::x8, offsetof(TimingEvent, m_downcount)));
+  m_emit->str(a64::w8, a64::MemOperand(GetHostReg64(RCPUPTR), offsetof(State, downcount)));
+
+  // main dispatch loop
+  a64::Label main_loop;
+  m_emit->Bind(&main_loop);
+  s_dispatcher_return_address = GetCurrentCodePointer();
+
+  // w8 <- pending_ticks
+  // w9 <- downcount
+  m_emit->ldr(a64::w8, a64::MemOperand(GetHostReg64(RCPUPTR), offsetof(State, pending_ticks)));
+  m_emit->ldr(a64::w9, a64::MemOperand(GetHostReg64(RCPUPTR), offsetof(State, downcount)));
+
+  // while downcount < pending_ticks
+  a64::Label downcount_hit;
+  m_emit->cmp(a64::w8, a64::w9);
+  m_emit->b(&downcount_hit, a64::ge);
+
+  // time to lookup the block
+  // w8 <- pc
+  m_emit->ldr(a64::w8, a64::MemOperand(GetHostReg64(RCPUPTR), offsetof(State, regs.pc)));
+
+  // w9 <- (pc & RAM_MASK) >> 2
+  m_emit->and_(a64::w9, a64::w8, Bus::RAM_MASK);
+  m_emit->lsr(a64::w9, a64::w9, 2);
+
+  // w10 <- ((pc & BIOS_MASK) >> 2) + FAST_MAP_RAM_SLOT_COUNT
+  m_emit->and_(a64::w10, a64::w8, Bus::BIOS_MASK);
+  m_emit->lsr(a64::w10, a64::w10, 2);
+  m_emit->add(a64::w10, a64::w10, FAST_MAP_RAM_SLOT_COUNT);
+
+  // current_instruction_pc <- pc (eax)
+  m_emit->str(a64::w8, a64::MemOperand(GetHostReg64(RCPUPTR), offsetof(State, current_instruction_pc)));
+
+  // if ((w8 (pc) & PHYSICAL_MEMORY_ADDRESS_MASK) >= BIOS_BASE) { use w10 as index }
+  m_emit->and_(a64::w8, a64::w8, PHYSICAL_MEMORY_ADDRESS_MASK);
+  m_emit->Mov(a64::w11, Bus::BIOS_BASE);
+  m_emit->cmp(a64::w8, a64::w11);
+  m_emit->csel(a64::w8, a64::w9, a64::w10, a64::lt);
+
+  // ebx contains our index, rax <- fast_map[ebx * 8], rax(), continue
+  EmitLoadGlobalAddress(9, CodeCache::GetFastMapPointer());
+  m_emit->ldr(a64::x8, a64::MemOperand(a64::x9, a64::x8, a64::LSL, 3));
+  m_emit->blr(a64::x8);
+
+  // end while
+  m_emit->Bind(&downcount_hit);
+
+  // check events then for frame done
+  EmitFunctionCall(nullptr, &TimingEvents::RunEvents);
+  m_emit->b(&frame_done_loop);
+
+  // all done
+  m_emit->Bind(&exit_dispatcher);
+  m_register_cache.PopCalleeSavedRegisters(true);
+  m_emit->Add(a64::sp, a64::sp, FUNCTION_STACK_SIZE);
+  m_emit->Ret();
+
+  CodeBlock::HostCodePointer ptr;
+  u32 code_size;
+  FinalizeBlock(&ptr, &code_size);
+  Log_InfoPrintf("Dispatcher is %u bytes at %p", code_size, ptr);
+  return ptr;
 }
 
 } // namespace CPU::Recompiler
