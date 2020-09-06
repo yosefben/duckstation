@@ -70,8 +70,9 @@ union MEMCTRL
 };
 
 std::bitset<CPU_CODE_CACHE_PAGE_COUNT> m_ram_code_bits{};
-u8* g_ram = nullptr;   // 2MB RAM
+u8* g_ram = nullptr;  // 2MB RAM
 u8* g_bios = nullptr; // 512K BIOS ROM
+u8* g_scratchpad = nullptr;
 
 static std::array<TickCount, 3> m_exp1_access_time = {};
 static std::array<TickCount, 3> m_exp2_access_time = {};
@@ -89,11 +90,15 @@ static std::string m_tty_line_buffer;
 static Common::MemoryArena m_memory_arena;
 static u8* m_fastmem_base = nullptr;
 static std::vector<Common::MemoryArena::View> m_fastmem_ram_views;
+static std::vector<Common::MemoryArena::View> m_fastmem_scratchpad_views;
+static std::vector<Common::MemoryArena::View> m_fastmem_bios_views;
 
 static std::tuple<TickCount, TickCount, TickCount> CalculateMemoryTiming(MEMDELAY mem_delay, COMDELAY common_delay);
 static void RecalculateMemoryTimings();
 
 static void SetCodePageFastmemProtection(u32 page_index, bool writable);
+static bool AllocateMemory();
+static void UnmapFastmemViews();
 
 #define FIXUP_WORD_READ_OFFSET(offset) ((offset) & ~u32(3))
 #define FIXUP_WORD_READ_VALUE(offset, value) ((value) >> (((offset)&u32(3)) * 8u))
@@ -124,11 +129,13 @@ bool Initialize()
 
 void Shutdown()
 {
-  m_fastmem_ram_views.clear();
+  UnmapFastmemViews();
   if (g_ram)
     m_memory_arena.ReleaseViewPtr(g_ram, RAM_SIZE);
   if (g_bios)
     m_memory_arena.ReleaseViewPtr(g_bios, BIOS_SIZE);
+  if (g_scratchpad)
+    m_memory_arena.ReleaseViewPtr(g_scratchpad, FASTMEM_SCRATCHPAD_SIZE);
 
   CPU::g_state.fastmem_base = nullptr;
 }
@@ -136,6 +143,7 @@ void Shutdown()
 void Reset()
 {
   std::memset(g_ram, 0, RAM_SIZE);
+  std::memset(g_scratchpad, 0, SCRATCHPAD_SIZE);
   m_MEMCTRL.exp1_base = 0x1F000000;
   m_MEMCTRL.exp2_base = 0x1F802000;
   m_MEMCTRL.exp1_delay_size.bits = 0x0013243F;
@@ -159,6 +167,7 @@ bool DoState(StateWrapper& sw)
   sw.Do(&m_spu_access_time);
   sw.DoBytes(g_ram, RAM_SIZE);
   sw.DoBytes(g_bios, BIOS_SIZE);
+  sw.DoBytes(g_scratchpad, SCRATCHPAD_SIZE);
   sw.DoArray(m_MEMCTRL.regs, countof(m_MEMCTRL.regs));
   sw.Do(&m_ram_size_reg);
   sw.Do(&m_tty_line_buffer);
@@ -248,6 +257,8 @@ bool AllocateMemory()
   // Create the base views.
   g_ram = static_cast<u8*>(m_memory_arena.CreateViewPtr(MEMORY_ARENA_RAM_OFFSET, RAM_SIZE, true, false));
   g_bios = static_cast<u8*>(m_memory_arena.CreateViewPtr(MEMORY_ARENA_BIOS_OFFSET, BIOS_SIZE, true, false));
+  g_scratchpad = static_cast<u8*>(
+    m_memory_arena.CreateViewPtr(MEMORY_ARENA_SCRATCHPAD_OFFSET, FASTMEM_SCRATCHPAD_SIZE, true, false));
   if (!g_ram || !g_bios)
   {
     Log_ErrorPrint("Failed to create base views of memory");
@@ -257,9 +268,16 @@ bool AllocateMemory()
   return true;
 }
 
-void UpdateFastmemViews(bool enabled, bool isolate_cache)
+void UnmapFastmemViews()
 {
   m_fastmem_ram_views.clear();
+  m_fastmem_scratchpad_views.clear();
+  m_fastmem_bios_views.clear();
+}
+
+void UpdateFastmemViews(bool enabled, bool isolate_cache)
+{
+  UnmapFastmemViews();
   if (!enabled)
   {
     m_fastmem_base = nullptr;
@@ -296,14 +314,32 @@ void UpdateFastmemViews(bool enabled, bool isolate_cache)
       {
         u8* page_address = map_address + (i * CPU_CODE_CACHE_PAGE_SIZE);
         if (!m_memory_arena.SetPageProtection(page_address, CPU_CODE_CACHE_PAGE_SIZE, true, false, false))
-        {
           Log_ErrorPrintf("Failed to write-protect code page at %p");
-          return;
-        }
       }
     }
 
     m_fastmem_ram_views.push_back(std::move(view.value()));
+  };
+  auto MapScratchpad = [](u32 base_address) {
+    u8* map_address = m_fastmem_base + base_address;
+    auto view =
+      m_memory_arena.CreateView(MEMORY_ARENA_SCRATCHPAD_OFFSET, FASTMEM_SCRATCHPAD_SIZE, true, false, map_address);
+    if (!view)
+    {
+      Log_ErrorPrintf("Failed to map scratchpad at fastmem area %p (offset 0x%08X)", map_address,
+                      FASTMEM_SCRATCHPAD_SIZE);
+      return;
+    }
+
+    // mark all pages beyond the first as inaccessible
+    // we need to do this because of windows's stupidity with its 64K mapping granularity
+    if (!m_memory_arena.SetPageProtection(map_address + CPU_CODE_CACHE_PAGE_SIZE,
+                                          FASTMEM_SCRATCHPAD_SIZE - CPU_CODE_CACHE_PAGE_SIZE, false, false, false))
+    {
+      Log_ErrorPrintf("Failed to read/write protect scratchpad");
+    }
+
+    m_fastmem_scratchpad_views.push_back(std::move(view.value()));
   };
   auto MapBIOS = [](u32 base_address) {
     u8* map_address = m_fastmem_base + base_address;
@@ -314,17 +350,19 @@ void UpdateFastmemViews(bool enabled, bool isolate_cache)
       return;
     }
 
-    m_fastmem_ram_views.push_back(std::move(view.value()));
+    m_fastmem_bios_views.push_back(std::move(view.value()));
   };
 
   if (!isolate_cache)
   {
     // KUSEG - cached
     MapRAM(0x00000000);
+    // MapScratchpad(0x1F800000);
     // MapBIOS(0x1FC00000);
 
     // KSEG0 - cached
     MapRAM(0x80000000);
+    // MapScratchpad(0x9F800000);
     // MapBIOS(0x9FC00000);
   }
 
@@ -410,7 +448,6 @@ bool HasCodePagesInRange(PhysicalMemoryAddress start_address, u32 size)
 
   return false;
 }
-
 
 static TickCount DoInvalidAccess(MemoryAccessType type, MemoryAccessSize size, PhysicalMemoryAddress address,
                                  u32& value)
@@ -1089,34 +1126,36 @@ static void WriteCacheControl(u32 value)
 template<MemoryAccessType type, MemoryAccessSize size>
 ALWAYS_INLINE static TickCount DoScratchpadAccess(PhysicalMemoryAddress address, u32& value)
 {
+  using namespace Bus;
+
   const PhysicalMemoryAddress cache_offset = address & DCACHE_OFFSET_MASK;
   if constexpr (size == MemoryAccessSize::Byte)
   {
     if constexpr (type == MemoryAccessType::Read)
-      value = ZeroExtend32(g_state.dcache[cache_offset]);
+      value = ZeroExtend32(g_scratchpad[cache_offset]);
     else
-      g_state.dcache[cache_offset] = Truncate8(value);
+      g_scratchpad[cache_offset] = Truncate8(value);
   }
   else if constexpr (size == MemoryAccessSize::HalfWord)
   {
     if constexpr (type == MemoryAccessType::Read)
     {
       u16 temp;
-      std::memcpy(&temp, &g_state.dcache[cache_offset], sizeof(temp));
+      std::memcpy(&temp, &g_scratchpad[cache_offset], sizeof(temp));
       value = ZeroExtend32(temp);
     }
     else
     {
       u16 temp = Truncate16(value);
-      std::memcpy(&g_state.dcache[cache_offset], &temp, sizeof(temp));
+      std::memcpy(&g_scratchpad[cache_offset], &temp, sizeof(temp));
     }
   }
   else if constexpr (size == MemoryAccessSize::Word)
   {
     if constexpr (type == MemoryAccessType::Read)
-      std::memcpy(&value, &g_state.dcache[cache_offset], sizeof(value));
+      std::memcpy(&value, &g_scratchpad[cache_offset], sizeof(value));
     else
-      std::memcpy(&g_state.dcache[cache_offset], &value, sizeof(value));
+      std::memcpy(&g_scratchpad[cache_offset], &value, sizeof(value));
   }
 
   return 0;
@@ -1524,7 +1563,7 @@ void* GetDirectReadMemoryPointer(VirtualMemoryAddress address, MemoryAccessSize 
     if (read_ticks)
       *read_ticks = 0;
 
-    return &g_state.dcache[paddr & DCACHE_OFFSET_MASK];
+    return &g_scratchpad[paddr & DCACHE_OFFSET_MASK];
   }
 
   if (paddr >= BIOS_BASE && paddr < (BIOS_BASE + BIOS_SIZE))
@@ -1555,7 +1594,7 @@ void* GetDirectWriteMemoryPointer(VirtualMemoryAddress address, MemoryAccessSize
 #endif
 
   if ((paddr & DCACHE_LOCATION_MASK) == DCACHE_LOCATION)
-    return &g_state.dcache[paddr & DCACHE_OFFSET_MASK];
+    return &g_scratchpad[paddr & DCACHE_OFFSET_MASK];
 
   return nullptr;
 }
