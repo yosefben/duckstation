@@ -20,6 +20,9 @@ enum : u32
   EXP1_BASE = 0x1F000000,
   EXP1_SIZE = 0x800000,
   EXP1_MASK = EXP1_SIZE - 1,
+  SCRATCHPAD_BASE = 0x1F800000,
+  SCRATCHPAD_SIZE = 0x400,
+  SCRATCHPAD_MASK = SCRATCHPAD_SIZE - 1,
   MEMCTRL_BASE = 0x1F801000,
   MEMCTRL_SIZE = 0x40,
   MEMCTRL_MASK = MEMCTRL_SIZE - 1,
@@ -73,12 +76,15 @@ enum : TickCount
 
 enum : size_t
 {
+  FASTMEM_SCRATCHPAD_SIZE = 0x10000,
+
   // Our memory arena contains storage for RAM and BIOS.
-  MEMORY_ARENA_SIZE = RAM_SIZE + BIOS_SIZE,
+  MEMORY_ARENA_SIZE = RAM_SIZE + FASTMEM_SCRATCHPAD_SIZE + BIOS_SIZE,
 
   // Offsets within the memory arena.
   MEMORY_ARENA_RAM_OFFSET = 0,
-  MEMORY_ARENA_BIOS_OFFSET = MEMORY_ARENA_RAM_OFFSET + RAM_SIZE,
+  MEMORY_ARENA_SCRATCHPAD_OFFSET = MEMORY_ARENA_RAM_OFFSET + RAM_SIZE,
+  MEMORY_ARENA_BIOS_OFFSET = MEMORY_ARENA_SCRATCHPAD_OFFSET + FASTMEM_SCRATCHPAD_SIZE,
 
   // Fastmem region size is 4GB to cover the entire 32-bit address space.
   FASTMEM_REGION_SIZE = UINT64_C(0x100000000)
@@ -90,7 +96,6 @@ void Reset();
 bool DoState(StateWrapper& sw);
 
 u8* GetFastmemBase();
-bool AllocateMemory();
 void UpdateFastmemViews(bool enabled, bool isolate_cache);
 
 void SetExpansionROM(std::vector<u8> data);
@@ -99,6 +104,7 @@ void SetBIOS(const std::vector<u8>& image);
 extern std::bitset<CPU_CODE_CACHE_PAGE_COUNT> m_ram_code_bits;
 extern u8* g_ram;  // 2MB RAM
 extern u8* g_bios; // 512K BIOS ROM
+extern u8* g_scratchpad; // 1KB scratchpad as 4K (in fastmem)
 
 /// Returns true if the address specified is writable (RAM).
 ALWAYS_INLINE static bool IsRAMAddress(PhysicalMemoryAddress address)
