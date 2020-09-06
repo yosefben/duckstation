@@ -366,6 +366,7 @@ void HostInterface::SetDefaultSettings(SettingsInterface& si)
   si.SetStringValue("CPU", "ExecutionMode", Settings::GetCPUExecutionModeName(Settings::DEFAULT_CPU_EXECUTION_MODE));
   si.SetBoolValue("CPU", "RecompilerMemoryExceptions", false);
   si.SetBoolValue("CPU", "ICache", false);
+  si.SetBoolValue("CPU", "Fastmem", true);
 
   si.SetStringValue("GPU", "Renderer", Settings::GetRendererName(Settings::DEFAULT_GPU_RENDERER));
   si.SetIntValue("GPU", "ResolutionScale", 1);
@@ -512,12 +513,13 @@ void HostInterface::CheckForSettingsChanges(const Settings& old_settings)
     if (g_settings.emulation_speed != old_settings.emulation_speed)
       System::UpdateThrottlePeriod();
 
-    if (g_settings.cpu_execution_mode != old_settings.cpu_execution_mode)
+    if (g_settings.cpu_execution_mode != old_settings.cpu_execution_mode ||
+        g_settings.cpu_fastmem != old_settings.cpu_fastmem)
     {
-      AddFormattedOSDMessage(5.0f, "Switching to %s CPU execution mode.",
-                             Settings::GetCPUExecutionModeName(g_settings.cpu_execution_mode));
-      CPU::CodeCache::SetUseRecompiler(g_settings.cpu_execution_mode == CPUExecutionMode::Recompiler);
-      CPU::CodeCache::Flush();
+      AddFormattedOSDMessage(5.0f, "Switching to %s CPU execution mode%s.",
+                             Settings::GetCPUExecutionModeName(g_settings.cpu_execution_mode),
+                             g_settings.cpu_fastmem ? " (fastmem)" : "");
+      CPU::CodeCache::Reinitialize();
       CPU::ClearICache();
     }
 
