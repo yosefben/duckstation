@@ -72,6 +72,7 @@ struct Settings
   CPUExecutionMode cpu_execution_mode = CPUExecutionMode::Interpreter;
   bool cpu_recompiler_memory_exceptions = false;
   bool cpu_recompiler_icache = false;
+  bool cpu_fastmem = true;
 
   float emulation_speed = 1.0f;
   bool speed_limiter_enabled = true;
@@ -170,6 +171,11 @@ struct Settings
   ALWAYS_INLINE PGXPMode GetPGXPMode()
   {
     return gpu_pgxp_enable ? (gpu_pgxp_cpu ? PGXPMode::CPU : PGXPMode::Memory) : PGXPMode::Disabled;
+  }
+
+  ALWAYS_INLINE bool IsUsingFastmem() const
+  {
+    return (cpu_fastmem && cpu_execution_mode == CPUExecutionMode::Recompiler && !cpu_recompiler_memory_exceptions);
   }
 
   bool HasAnyPerGameMemoryCards() const;
