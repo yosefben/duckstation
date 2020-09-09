@@ -43,7 +43,7 @@
      </property>
      <property name="icon">
       <iconset resource="resources/icons.qrc">
-       <normaloff>:/icons/media-optical.png</normaloff>:/icons/media-optical.png</iconset>
+       <normaloff>:/icons/actions-media-eject-16.png</normaloff>:/icons/actions-media-eject-16.png</iconset>
      </property>
      <widget class="QMenu" name="menuChangeDiscFromPlaylist">
       <property name="title">
@@ -61,7 +61,7 @@
      </property>
      <property name="icon">
       <iconset resource="resources/icons.qrc">
-       <normaloff>:/icons/actions-tools-wizard.png</normaloff>:/icons/actions-tools-wizard.png</iconset>
+       <normaloff>:/icons/actions-games-solve-16.png</normaloff>:/icons/actions-games-solve-16.png</iconset>
      </property>
     </widget>
     <widget class="QMenu" name="menuLoadState">
@@ -70,7 +70,7 @@
      </property>
      <property name="icon">
       <iconset resource="resources/icons.qrc">
-       <normaloff>:/icons/document-open.png</normaloff>:/icons/document-open.png</iconset>
+       <normaloff>:/icons/actions-document-revert-16.png</normaloff>:/icons/actions-document-revert-16.png</iconset>
      </property>
     </widget>
     <widget class="QMenu" name="menuSaveState">
@@ -79,7 +79,7 @@
      </property>
      <property name="icon">
       <iconset resource="resources/icons.qrc">
-       <normaloff>:/icons/document-save.png</normaloff>:/icons/document-save.png</iconset>
+       <normaloff>:/icons/actions-document-save-16.png</normaloff>:/icons/actions-document-save-16.png</iconset>
      </property>
     </widget>
     <addaction name="actionStartDisc"/>
@@ -227,7 +227,7 @@
   <action name="actionStartDisc">
    <property name="icon">
     <iconset resource="resources/icons.qrc">
-     <normaloff>:/icons/drive-optical.png</normaloff>:/icons/drive-optical.png</iconset>
+     <normaloff>:/icons/devices-drive-optical-32.png</normaloff>:/icons/devices-drive-optical-32.png</iconset>
    </property>
    <property name="text">
     <string>Start &amp;Disc...</string>
@@ -236,7 +236,7 @@
   <action name="actionStartBios">
    <property name="icon">
     <iconset resource="resources/icons.qrc">
-     <normaloff>:/icons/drive-removable-media.png</normaloff>:/icons/drive-removable-media.png</iconset>
+     <normaloff>:/icons/apps-utilities-terminal-32.png</normaloff>:/icons/apps-utilities-terminal-32.png</iconset>
    </property>
    <property name="text">
     <string>Start &amp;BIOS</string>
@@ -263,7 +263,7 @@
   <action name="actionPowerOff">
    <property name="icon">
     <iconset resource="resources/icons.qrc">
-     <normaloff>:/icons/system-shutdown.png</normaloff>:/icons/system-shutdown.png</iconset>
+     <normaloff>:/icons/actions-system-shutdown-32.png</normaloff>:/icons/actions-system-shutdown-32.png</iconset>
    </property>
    <property name="text">
     <string>Power &amp;Off</string>
@@ -272,7 +272,7 @@
   <action name="actionReset">
    <property name="icon">
     <iconset resource="resources/icons.qrc">
-     <normaloff>:/icons/view-refresh.png</normaloff>:/icons/view-refresh.png</iconset>
+     <normaloff>:/icons/actions-system-reboot-32.png</normaloff>:/icons/actions-system-reboot-32.png</iconset>
    </property>
    <property name="text">
     <string>&amp;Reset</string>
@@ -284,7 +284,7 @@
    </property>
    <property name="icon">
     <iconset resource="resources/icons.qrc">
-     <normaloff>:/icons/media-playback-pause.png</normaloff>:/icons/media-playback-pause.png</iconset>
+     <normaloff>:/icons/actions-media-playback-pause-32.png</normaloff>:/icons/actions-media-playback-pause-32.png</iconset>
    </property>
    <property name="text">
     <string>&amp;Pause</string>
@@ -293,7 +293,7 @@
   <action name="actionLoadState">
    <property name="icon">
     <iconset resource="resources/icons.qrc">
-     <normaloff>:/icons/document-open.png</normaloff>:/icons/document-open.png</iconset>
+     <normaloff>:/icons/actions-document-revert-32.png</normaloff>:/icons/actions-document-revert-32.png</iconset>
    </property>
    <property name="text">
     <string>&amp;Load State</string>
@@ -302,7 +302,7 @@
   <action name="actionSaveState">
    <property name="icon">
     <iconset resource="resources/icons.qrc">
-     <normaloff>:/icons/document-save.png</normaloff>:/icons/document-save.png</iconset>
+     <normaloff>:/icons/actions-document-save-32.png</normaloff>:/icons/actions-document-save-32.png</iconset>
    </property>
    <property name="text">
     <string>&amp;Save State</string>
@@ -352,7 +352,7 @@
   <action name="actionFullscreen">
    <property name="icon">
     <iconset resource="resources/icons.qrc">
-     <normaloff>:/icons/view-fullscreen.png</normaloff>:/icons/view-fullscreen.png</iconset>
+     <normaloff>:/icons/actions-view-fullscreen-32.png</normaloff>:/icons/actions-view-fullscreen-32.png</iconset>
    </property>
    <property name="text">
     <string>Fullscreen</string>
@@ -391,7 +391,7 @@
   <action name="actionChangeDisc">
    <property name="icon">
     <iconset resource="resources/icons.qrc">
-     <normaloff>:/icons/media-optical.png</normaloff>:/icons/media-optical.png</iconset>
+     <normaloff>:/icons/actions-media-eject-32.png</normaloff>:/actions-media-eject-32.png</iconset>
    </property>
    <property name="text">
     <string>Change Disc...</string>
@@ -400,7 +400,7 @@
   <action name="actionCheats">
    <property name="icon">
     <iconset resource="resources/icons.qrc">
-     <normaloff>:/icons/actions-tools-wizard-32.png</normaloff>:/icons/actions-tools-wizard-32.png</iconset>
+     <normaloff>:/icons/actions-games-solve-32.png</normaloff>:/icons/actions-games-solve-32.png</iconset>
    </property>
    <property name="text">
     <string>Cheats...</string>
@@ -454,7 +454,7 @@
   <action name="actionSettings">
    <property name="icon">
     <iconset resource="resources/icons.qrc">
-     <normaloff>:/icons/applications-system.png</normaloff>:/icons/applications-system.png</iconset>
+     <normaloff>:/icons/categories-applications-system-32.png</normaloff>:/icons/categories-applications-system-32.png</iconset>
    </property>
    <property name="text">
     <string>&amp;Settings...</string>
@@ -565,7 +565,7 @@
   <action name="actionScreenshot">
    <property name="icon">
     <iconset resource="resources/icons.qrc">
-     <normaloff>:/icons/video-display.png</normaloff>:/icons/video-display.png</iconset>
+     <normaloff>:/icons/devices-camera-photo-32.png</normaloff>:/icons/devices-camera-photo-32.png</iconset>
    </property>
    <property name="text">
     <string>&amp;Screenshot</string>
@@ -583,7 +583,7 @@
   <action name="actionResumeLastState">
    <property name="icon">
     <iconset resource="resources/icons.qrc">
-     <normaloff>:/icons/media-playback-start.png</normaloff>:/icons/media-playback-start.png</iconset>
+     <normaloff>:/icons/actions-media-playback-start-32.png</normaloff>:/icons/actions-media-playback-start-32.png</iconset>
    </property>
    <property name="text">
     <string>Resume</string>

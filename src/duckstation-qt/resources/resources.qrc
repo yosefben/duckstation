@@ -1,51 +1,180 @@
 <RCC>
   <qresource>
-    <file>icons/flag-eu.svg</file>
-    <file>icons/flag-eu.png</file>
-    <file>icons/flag-eu@2x.png</file>
-    <file>icons/flag-jp.svg</file>
-    <file>icons/flag-jp.png</file>
-    <file>icons/flag-jp@2x.png</file>
-    <file>icons/flag-uc.svg</file>
-    <file>icons/flag-uc.png</file>
-    <file>icons/flag-uc@2x.png</file>
-    <file>icons/flag-us.svg</file>
-    <file>icons/flag-us.png</file>
-    <file>icons/flag-us@2x.png</file>
-    <file>icons/star-0.png</file>
-    <file>icons/star-1.png</file>
-    <file>icons/star-2.png</file>
-    <file>icons/star-3.png</file>
-    <file>icons/star-4.png</file>
-    <file>icons/star-5.png</file>
-    <file>icons/address-book-new-22.png</file>
+    <file>icons/actions-document-revert-16.png</file>
+    <file>icons/actions-document-revert-16@2x.png</file>
+    <file>icons/actions-document-revert-32.png</file>
+    <file>icons/actions-document-revert-32@2x.png</file>
+    <file>icons/actions-document-save-16.png</file>
+    <file>icons/actions-document-save-16@2x.png</file>
+    <file>icons/actions-document-save-32.png</file>
+    <file>icons/actions-document-save-32@2x.png</file>
+    <file>icons/actions-edit-find-16.png</file>
+    <file>icons/actions-edit-find-16@2x.png</file>
+    <file>icons/actions-edit-find-32.png</file>
+    <file>icons/actions-edit-find-32@2x.png</file>
+    <file>icons/actions-games-solve-16.png</file>
+    <file>icons/actions-games-solve-16@2x.png</file>
+    <file>icons/actions-games-solve-32.png</file>
+    <file>icons/actions-games-solve-32@2x.png</file>
+    <file>icons/actions-help-about-16.png</file>
+    <file>icons/actions-help-about-16@2x.png</file>
+    <file>icons/actions-help-about-32.png</file>
+    <file>icons/actions-help-about-32@2x.png</file>
+    <file>icons/actions-help-hint-16.png</file>
+    <file>icons/actions-help-hint-16@2x.png</file>
+    <file>icons/actions-help-hint-32.png</file>
+    <file>icons/actions-help-hint-32@2x.png</file>
+    <file>icons/actions-media-eject-16.png</file>
+    <file>icons/actions-media-eject-16@2x.png</file>
+    <file>icons/actions-media-eject-32.png</file>
+    <file>icons/actions-media-eject-32@2x.png</file>
+    <file>icons/actions-media-playback-pause-16.png</file>
+    <file>icons/actions-media-playback-pause-16@2x.png</file>
+    <file>icons/actions-media-playback-pause-32.png</file>
+    <file>icons/actions-media-playback-pause-32@2x.png</file>
+    <file>icons/actions-media-playback-start-16.png</file>
+    <file>icons/actions-media-playback-start-16@2x.png</file>
+    <file>icons/actions-media-playback-start-32.png</file>
+    <file>icons/actions-media-playback-start-32@2x.png</file>
+    <file>icons/actions-media-playback-stop-16.png</file>
+    <file>icons/actions-media-playback-stop-16@2x.png</file>
+    <file>icons/actions-media-playback-stop-32.png</file>
+    <file>icons/actions-media-playback-stop-32@2x.png</file>
+    <file>icons/actions-media-record-16.png</file>
+    <file>icons/actions-media-record-16@2x.png</file>
+    <file>icons/actions-media-record-32.png</file>
+    <file>icons/actions-media-record-32@2x.png</file>
+    <file>icons/actions-media-skip-backward-16.png</file>
+    <file>icons/actions-media-skip-backward-16@2x.png</file>
+    <file>icons/actions-media-skip-backward-32.png</file>
+    <file>icons/actions-media-skip-backward-32@2x.png</file>
+    <file>icons/actions-player-volume-16.png</file>
+    <file>icons/actions-player-volume-16@2x.png</file>
+    <file>icons/actions-player-volume-32.png</file>
+    <file>icons/actions-player-volume-32@2x.png</file>
+    <file>icons/actions-speaker-16.png</file>
+    <file>icons/actions-speaker-16@2x.png</file>
+    <file>icons/actions-speaker-32.png</file>
+    <file>icons/actions-speaker-32@2x.png</file>
+    <file>icons/actions-system-reboot-16.png</file>
+    <file>icons/actions-system-reboot-16@2x.png</file>
+    <file>icons/actions-system-reboot-32.png</file>
+    <file>icons/actions-system-reboot-32@2x.png</file>
+    <file>icons/actions-system-shutdown-16.png</file>
+    <file>icons/actions-system-shutdown-16@2x.png</file>
+    <file>icons/actions-system-shutdown-32.png</file>
+    <file>icons/actions-system-shutdown-32@2x.png</file>
+    <file>icons/actions-tools-media-optical-format-16.png</file>
+    <file>icons/actions-tools-media-optical-format-16@2x.png</file>
+    <file>icons/actions-tools-media-optical-format-32.png</file>
+    <file>icons/actions-tools-media-optical-format-32@2x.png</file>
     <file>icons/actions-tools-wizard.png</file>
     <file>icons/actions-tools-wizard@2x.png</file>
     <file>icons/actions-tools-wizard-32.png</file>
     <file>icons/actions-tools-wizard-32@2x.png</file>
-    <file>icons/applications-internet.png</file>
-    <file>icons/system-search.png</file>
-    <file>icons/list-add.png</file>
-    <file>icons/list-remove.png</file>
-    <file>icons/duck.png</file>
-    <file>icons/edit-find.png</file>
-    <file>icons/folder-open.png</file>
+    <file>icons/actions-view-fullscreen-16.png</file>
+    <file>icons/actions-view-fullscreen-16@2x.png</file>
+    <file>icons/actions-view-fullscreen-32.png</file>
+    <file>icons/actions-view-fullscreen-32@2x.png</file>
+    <file>icons/actions-view-refresh-16.png</file>
+    <file>icons/actions-view-refresh-16@2x.png</file>
+    <file>icons/actions-view-refresh-32.png</file>
+    <file>icons/actions-view-refresh-32@2x.png</file>
+    <file>icons/address-book-new-22.png</file>
     <file>icons/applications-development.png</file>
+    <file>icons/applications-internet.png</file>
     <file>icons/applications-other.png</file>
     <file>icons/applications-system.png</file>
     <file>icons/applications-system-24.png</file>
+    <file>icons/apps-preferences-desktop-display-16.png</file>
+    <file>icons/apps-preferences-desktop-display-16@2x.png</file>
+    <file>icons/apps-preferences-desktop-display-32.png</file>
+    <file>icons/apps-preferences-desktop-display-32@2x.png</file>
+    <file>icons/apps-preferences-desktop-gaming-16.png</file>
+    <file>icons/apps-preferences-desktop-gaming-16@2x.png</file>
+    <file>icons/apps-preferences-desktop-gaming-32.png</file>
+    <file>icons/apps-preferences-desktop-gaming-32@2x.png</file>
+    <file>icons/apps-preferences-desktop-keyboard-16.png</file>
+    <file>icons/apps-preferences-desktop-keyboard-16@2x.png</file>
+    <file>icons/apps-preferences-desktop-keyboard-32.png</file>
+    <file>icons/apps-preferences-desktop-keyboard-32@2x.png</file>
+    <file>icons/apps-system-file-manager-16.png</file>
+    <file>icons/apps-system-file-manager-16@2x.png</file>
+    <file>icons/apps-system-file-manager-32.png</file>
+    <file>icons/apps-system-file-manager-32@2x.png</file>
+    <file>icons/apps-system-software-update-16.png</file>
+    <file>icons/apps-system-software-update-16@2x.png</file>
+    <file>icons/apps-system-software-update-32.png</file>
+    <file>icons/apps-system-software-update-32@2x.png</file>
+    <file>icons/apps-system-software-update-64.png</file>
+    <file>icons/apps-system-software-update-64@2x.png</file>
+    <file>icons/apps-utilities-terminal-16.png</file>
+    <file>icons/apps-utilities-terminal-16@2x.png</file>
+    <file>icons/apps-utilities-terminal-32.png</file>
+    <file>icons/apps-utilities-terminal-32@2x.png</file>
     <file>icons/audio-card.png</file>
+    <file>icons/categories-applications-engineering-16.png</file>
+    <file>icons/categories-applications-engineering-16@2x.png</file>
+    <file>icons/categories-applications-engineering-32.png</file>
+    <file>icons/categories-applications-engineering-32@2x.png</file>
+    <file>icons/categories-applications-system-16.png</file>
+    <file>icons/categories-applications-system-16@2x.png</file>
+    <file>icons/categories-applications-system-32.png</file>
+    <file>icons/categories-applications-system-32@2x.png</file>
+    <file>icons/devices-camera-photo-16.png</file>
+    <file>icons/devices-camera-photo-16@2x.png</file>
+    <file>icons/devices-camera-photo-32.png</file>
+    <file>icons/devices-camera-photo-32@2x.png</file>
+    <file>icons/devices-drive-optical-16.png</file>
+    <file>icons/devices-drive-optical-16@2x.png</file>
+    <file>icons/devices-drive-optical-32.png</file>
+    <file>icons/devices-drive-optical-32@2x.png</file>
+    <file>icons/devices-input-keyboard-16.png</file>
+    <file>icons/devices-input-keyboard-16@2x.png</file>
+    <file>icons/devices-input-keyboard-32.png</file>
+    <file>icons/devices-input-keyboard-32@2x.png</file>
+    <file>icons/devices-media-optical-16.png</file>
+    <file>icons/devices-media-optical-16@2x.png</file>
+    <file>icons/devices-media-optical-32.png</file>
+    <file>icons/devices-media-optical-32@2x.png</file>
     <file>icons/document-open.png</file>
     <file>icons/document-save.png</file>
     <file>icons/drive-optical.png</file>
     <file>icons/drive-removable-media.png</file>
+    <file>icons/duck.png</file>
+    <file>icons/duck_128.png</file>
+    <file>icons/duck_64.png</file>
+    <file>icons/edit-find.png</file>
+    <file>icons/flag-eu.png</file>
+    <file>icons/flag-eu.svg</file>
+    <file>icons/flag-eu@2x.png</file>
+    <file>icons/flag-jp.png</file>
+    <file>icons/flag-jp.svg</file>
+    <file>icons/flag-jp@2x.png</file>
+    <file>icons/flag-uc.png</file>
+    <file>icons/flag-uc.svg</file>
+    <file>icons/flag-uc@2x.png</file>
+    <file>icons/flag-us.png</file>
+    <file>icons/flag-us.svg</file>
+    <file>icons/flag-us@2x.png</file>
+    <file>icons/folder-open.png</file>
+    <file>icons/grab.sh</file>
     <file>icons/input-gaming.png</file>
+    <file>icons/list-add.png</file>
+    <file>icons/list-remove.png</file>
     <file>icons/media-flash.png</file>
     <file>icons/media-flash-24.png</file>
     <file>icons/media-optical.png</file>
     <file>icons/media-optical-24.png</file>
     <file>icons/media-playback-pause.png</file>
     <file>icons/media-playback-start.png</file>
+    <file>icons/star-0.png</file>
+    <file>icons/star-1.png</file>
+    <file>icons/star-2.png</file>
+    <file>icons/star-3.png</file>
+    <file>icons/star-4.png</file>
+    <file>icons/star-5.png</file>
+    <file>icons/system-search.png</file>
     <file>icons/system-shutdown.png</file>
     <file>icons/utilities-system-monitor.png</file>
     <file>icons/video-display.png</file>
