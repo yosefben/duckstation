@@ -144,7 +144,7 @@ union GPUVertexPosition
 // Sprites/rectangles should be clipped to 12 bits before drawing.
 static constexpr s32 TruncateGPUVertexPosition(s32 x)
 {
-  return SignExtendN<11, s32>(x);
+  return SignExtendN<12, s32>(x);
 }
 
 // bits in GP0(E1h) or texpage part of polygon
@@ -209,16 +209,12 @@ union GPUTexturePaletteReg
   ALWAYS_INLINE u32 GetYBase() const { return static_cast<u32>(y); }
 };
 
-union GPUTextureWindowReg
+struct GPUTextureWindow
 {
-  static constexpr u32 MASK = 0b11111111111111111111;
-
-  u32 bits;
-
-  BitField<u32, u8, 0, 5> mask_x;
-  BitField<u32, u8, 5, 5> mask_y;
-  BitField<u32, u8, 10, 5> offset_x;
-  BitField<u32, u8, 15, 5> offset_y;
+  u8 and_x;
+  u8 and_y;
+  u8 or_x;
+  u8 or_y;
 };
 
 // 4x4 dither matrix.
@@ -362,7 +358,7 @@ struct GPUBackendDrawCommand : public GPUBackendCommand
   GPURenderCommand rc;
   GPUDrawModeReg draw_mode;
   GPUTexturePaletteReg palette;
-  GPUTextureWindowReg window;
+  GPUTextureWindow window;
   Common::Rectangle<u16> bounds;
 
   ALWAYS_INLINE bool IsDitheringEnabled() const { return rc.IsDitheringEnabled() && draw_mode.dither_enable; }
@@ -376,14 +372,22 @@ struct GPUBackendDrawPolygonCommand : public GPUBackendDrawCommand
   {
     float precise_x, precise_y, precise_w;
     s32 x, y;
-    u32 color;
-    u16 texcoord;
-
-    ALWAYS_INLINE u8 GetR() const { return Truncate8(color); }
-    ALWAYS_INLINE u8 GetG() const { return Truncate8(color >> 8); }
-    ALWAYS_INLINE u8 GetB() const { return Truncate8(color >> 16); }
-    ALWAYS_INLINE u8 GetU() const { return Truncate8(texcoord); }
-    ALWAYS_INLINE u8 GetV() const { return Truncate8(texcoord >> 8); }
+    union
+    {
+      struct
+      {
+        u8 r, g, b, a;
+      };
+      u32 color;
+    };
+    union
+    {
+      struct
+      {
+        u8 u, v;
+      };
+      u16 texcoord;
+    };
   };
 
   Vertex vertices[0];
@@ -408,11 +412,14 @@ struct GPUBackendDrawLineCommand : public GPUBackendDrawCommand
   struct Vertex
   {
     s32 x, y;
-    u32 color;
-
-    ALWAYS_INLINE u8 GetR() const { return Truncate8(color); }
-    ALWAYS_INLINE u8 GetG() const { return Truncate8(color >> 8); }
-    ALWAYS_INLINE u8 GetB() const { return Truncate8(color >> 16); }
+    union
+    {
+      struct
+      {
+        u8 r, g, b, a;
+      };
+      u32 color;
+    };
   };
 
   Vertex vertices[0];

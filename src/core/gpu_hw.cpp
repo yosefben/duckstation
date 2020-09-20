@@ -723,14 +723,13 @@ void GPU_HW::SetupDraw(const GPUBackendDrawCommand* cmd)
   m_batch.transparency_mode = transparency_mode;
   m_batch.dithering = dithering_enable;
 
-  if (m_last_texture_window_reg.bits != cmd->window.bits)
+  if (std::memcmp(&m_last_texture_window, &cmd->window, sizeof(m_last_texture_window)) != 0)
   {
-    m_last_texture_window_reg.bits = cmd->window.bits;
-
-    m_batch_ubo_data.u_texture_window_mask[0] = ZeroExtend32(cmd->window.mask_x.GetValue());
-    m_batch_ubo_data.u_texture_window_mask[1] = ZeroExtend32(cmd->window.mask_y.GetValue());
-    m_batch_ubo_data.u_texture_window_offset[0] = ZeroExtend32(cmd->window.offset_x.GetValue());
-    m_batch_ubo_data.u_texture_window_offset[1] = ZeroExtend32(cmd->window.offset_y.GetValue());
+    m_last_texture_window = cmd->window;
+    m_batch_ubo_data.u_texture_window_and[0] = ZeroExtend32(cmd->window.and_x);
+    m_batch_ubo_data.u_texture_window_and[1] = ZeroExtend32(cmd->window.and_y);
+    m_batch_ubo_data.u_texture_window_or[0] = ZeroExtend32(cmd->window.or_x);
+    m_batch_ubo_data.u_texture_window_or[1] = ZeroExtend32(cmd->window.or_y);
     m_batch_ubo_dirty = true;
   }
 }

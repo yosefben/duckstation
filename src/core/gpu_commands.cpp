@@ -249,9 +249,16 @@ bool GPU::HandleSetTextureWindowCommand()
 {
   const u32 param = FifoPop() & 0x00FFFFFFu;
 
-  m_texture_window.bits = param;
-  Log_DebugPrintf("Set texture window %02X %02X %02X %02X", m_texture_window.mask_x, m_texture_window.mask_y,
-                  m_texture_window.offset_x, m_texture_window.offset_y);
+  const u8 mask_x = Truncate8(param & UINT32_C(0x1F));
+  const u8 mask_y = Truncate8((param >> 5) & UINT32_C(0x1F));
+  const u8 offset_x = Truncate8((param >> 10) & UINT32_C(0x1F));
+  const u8 offset_y = Truncate8((param >> 15) & UINT32_C(0x1F));
+  Log_DebugPrintf("Set texture window %02X %02X %02X %02X", mask_x, mask_y, offset_x, offset_y);
+
+  m_texture_window.and_x = ~(mask_x * 8);
+  m_texture_window.and_y = ~(mask_y * 8);
+  m_texture_window.or_x = (offset_x & mask_x) * 8u;
+  m_texture_window.or_y = (offset_y & mask_y) * 8u;
 
   AddCommandTicks(1);
   EndCommand();
@@ -371,7 +378,7 @@ void GPU::FillDrawCommand(GPUBackendDrawCommand* cmd, GPURenderCommand rc) const
   FillBackendCommandParameters(cmd);
   cmd->rc.bits = rc.bits;
   cmd->draw_mode.bits = m_draw_mode.bits;
-  cmd->window.bits = m_texture_window.bits;
+  cmd->window = m_texture_window;
 }
 
 void GPU::UpdateDrawingArea()
@@ -576,7 +583,7 @@ bool GPU::HandleRenderRectangleCommand()
   FillDrawCommand(cmd, rc);
   cmd->color = rc.color_for_first_vertex;
   cmd->draw_mode.bits = m_draw_mode.bits;
-  cmd->window.bits = m_texture_window.bits;
+  cmd->window = m_texture_window;
 
   const GPUVertexPosition vp{FifoPop()};
   cmd->x = TruncateGPUVertexPosition(m_drawing_offset.x + vp.x);

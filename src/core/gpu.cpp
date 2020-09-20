@@ -103,7 +103,10 @@ void GPU::SoftReset()
   m_blit_buffer.clear();
   m_blit_remaining_words = 0;
   m_draw_mode.bits = 0;
-  m_texture_window.bits = 0;
+  m_texture_window.and_x = 0xFF;
+  m_texture_window.and_y = 0xFF;
+  m_texture_window.or_x = 0x00;
+  m_texture_window.or_y = 0x00;
   UpdateDMARequest();
   UpdateCRTCConfig();
   UpdateCRTCTickEvent();
@@ -120,14 +123,15 @@ bool GPU::DoState(StateWrapper& sw)
 
   sw.Do(&m_GPUSTAT.bits);
 
-  sw.Do(&m_drawing_offset.x);
-  sw.Do(&m_drawing_offset.y);
   sw.Do(&m_drawing_area.left);
   sw.Do(&m_drawing_area.top);
   sw.Do(&m_drawing_area.right);
   sw.Do(&m_drawing_area.bottom);
   sw.Do(&m_draw_mode.bits);
-  sw.Do(&m_texture_window.bits);
+  sw.Do(&m_texture_window.and_x);
+  sw.Do(&m_texture_window.and_y);
+  sw.Do(&m_texture_window.or_x);
+  sw.Do(&m_texture_window.or_y);
 
   sw.Do(&m_console_is_pal);
   sw.Do(&m_set_texture_disable_mask);
@@ -1029,8 +1033,9 @@ void GPU::HandleGetGPUInfoCommand(u32 value)
 
     case 0x02: // Get Texture Window
     {
+        // FIXME
       Log_DebugPrintf("Get texture window");
-      m_GPUREAD_latch = m_texture_window.bits;
+      m_GPUREAD_latch = 0;
     }
     break;
 

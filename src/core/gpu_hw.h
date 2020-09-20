@@ -111,8 +111,8 @@ protected:
 
   struct BatchUBOData
   {
-    u32 u_texture_window_mask[2];
-    u32 u_texture_window_offset[2];
+    u32 u_texture_window_and[2];
+    u32 u_texture_window_or[2];
     float u_src_alpha_factor;
     float u_dst_alpha_factor;
     u32 u_interlaced_displayed_field;
@@ -269,7 +269,7 @@ protected:
   Common::Rectangle<u32> m_vram_dirty_rect;
 
   GPUDrawModeReg m_last_texture_page_bits{};
-  GPUTextureWindowReg m_last_texture_window_reg{};
+  GPUTextureWindow m_last_texture_window{};
 
   // Statistics
   RendererStats m_renderer_stats = {};

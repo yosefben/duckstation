@@ -302,7 +302,7 @@ private:
 
   Common::Rectangle<u32> m_drawing_area{0, 0, VRAM_WIDTH, VRAM_HEIGHT};
   GPUDrawModeReg m_draw_mode{};
-  GPUTextureWindowReg m_texture_window{};
+  GPUTextureWindow m_texture_window{};
 
   bool m_console_is_pal = false;
   bool m_set_texture_disable_mask = false;
