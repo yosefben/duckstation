@@ -13,7 +13,7 @@ if(NOT BUILD_LIBRETRO_CORE)
   endif()
 endif()
 
-if(ANDROID OR BUILD_SDL_FRONTEND OR BUILD_QT_FRONTEND OR BUILD_LIBRETRO_CORE)
+if(ANDROID OR BUILD_SDL_FRONTEND OR BUILD_QT_FRONTEND OR BUILD_LIBRETRO_CORE OR BUILD_GO2_FRONTEND)
   add_subdirectory(frontend-common)
 endif()
 
@@ -29,3 +29,6 @@ if(BUILD_LIBRETRO_CORE)
   add_subdirectory(duckstation-libretro)
 endif()
 
+if(BUILD_GO2_FRONTEND)
+  add_subdirectory(duckstation-go2)
+endif()
