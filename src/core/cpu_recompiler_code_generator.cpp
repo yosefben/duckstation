@@ -19,8 +19,7 @@ u32 CodeGenerator::CalculateRegisterOffset(Reg reg)
   return u32(offsetof(State, regs.r[0]) + (static_cast<u32>(reg) * sizeof(u32)));
 }
 
-bool CodeGenerator::CompileBlock(const CodeBlock* block, CodeBlock::HostCodePointer* out_host_code,
-                                 u32* out_host_code_size)
+bool CodeGenerator::CompileBlock(CodeBlock* block, CodeBlock::HostCodePointer* out_host_code, u32* out_host_code_size)
 {
   // TODO: Align code buffer.
 
@@ -40,8 +39,10 @@ bool CodeGenerator::CompileBlock(const CodeBlock* block, CodeBlock::HostCodePoin
     Log_DebugPrintf("Compiling instruction '%s'", disasm.GetCharArray());
 #endif
 
+    m_current_instruction = cbi;
     if (!CompileInstruction(*cbi))
     {
+      m_current_instruction = nullptr;
       m_block_end = nullptr;
       m_block_start = nullptr;
       m_block = nullptr;
@@ -60,6 +61,7 @@ bool CodeGenerator::CompileBlock(const CodeBlock* block, CodeBlock::HostCodePoin
 
   DebugAssert(m_register_cache.GetUsedHostRegisters() == 0);
 
+  m_current_instruction = nullptr;
   m_block_end = nullptr;
   m_block_start = nullptr;
   m_block = nullptr;
@@ -845,8 +847,8 @@ void CodeGenerator::BlockPrologue()
 
   // we don't know the state of the last block, so assume load delays might be in progress
   // TODO: Pull load delay into register cache
-  m_current_instruction_in_branch_delay_slot_dirty = true;
-  m_branch_was_taken_dirty = true;
+  m_current_instruction_in_branch_delay_slot_dirty = g_settings.cpu_recompiler_memory_exceptions;
+  m_branch_was_taken_dirty = g_settings.cpu_recompiler_memory_exceptions;
   m_current_instruction_was_branch_taken_dirty = false;
   m_load_delay_dirty = true;
 
@@ -909,7 +911,7 @@ void CodeGenerator::InstructionPrologue(const CodeBlockInstruction& cbi, TickCou
     return;
   }
 
-  if (cbi.is_branch_delay_slot)
+  if (cbi.is_branch_delay_slot && g_settings.cpu_recompiler_memory_exceptions)
   {
     // m_current_instruction_in_branch_delay_slot = true
     EmitStoreCPUStructField(offsetof(State, current_instruction_in_branch_delay_slot), Value::FromConstantU8(1));
@@ -1895,7 +1897,22 @@ bool CodeGenerator::Compile_cop0(const CodeBlockInstruction& cbi)
               value = AndValues(value, Value::FromConstantU32(write_mask));
             }
 
-            EmitStoreCPUStructField(offset, value);
+            // changing SR[Isc] needs to update fastmem views
+            if (reg == Cop0Reg::SR && g_settings.cpu_fastmem)
+            {
+              LabelType skip_fastmem_update;
+              Value old_value = m_register_cache.AllocateScratch(RegSize_32);
+              EmitLoadCPUStructField(old_value.host_reg, RegSize_32, offset);
+              EmitStoreCPUStructField(offset, value);
+              EmitXor(old_value.host_reg, old_value.host_reg, value);
+              EmitBranchIfBitClear(old_value.host_reg, RegSize_32, 16, &skip_fastmem_update);
+              EmitFunctionCall(nullptr, &Thunks::UpdateFastmemMapping, m_register_cache.GetCPUPtr());
+              EmitBindLabel(&skip_fastmem_update);
+            }
+            else
+            {
+              EmitStoreCPUStructField(offset, value);
+            }
           }
         }
 
@@ -1913,21 +1930,8 @@ bool CodeGenerator::Compile_cop0(const CodeBlockInstruction& cbi)
           EmitBranchIfBitClear(sr_value.host_reg, sr_value.size, 0, &no_interrupt);
           EmitAnd(sr_value.host_reg, sr_value.host_reg, cause_value);
           EmitTest(sr_value.host_reg, Value::FromConstantU32(0xFF00));
-          sr_value.ReleaseAndClear();
-          cause_value.ReleaseAndClear();
           EmitConditionalBranch(Condition::Zero, false, &no_interrupt);
-
-          EmitBranch(GetCurrentFarCodePointer());
-          SwitchToFarCode();
-
-          // we want to flush pc here
-          m_register_cache.PushState();
-          m_register_cache.FlushAllGuestRegisters(false, true);
-          WriteNewPC(CalculatePC(), false);
-          EmitExceptionExit();
-          m_register_cache.PopState();
-
-          SwitchToNearCode();
+          EmitStoreCPUStructField(offsetof(State, downcount), Value::FromConstantU32(0));
           EmitBindLabel(&no_interrupt);
         }
 
@@ -1961,6 +1965,16 @@ bool CodeGenerator::Compile_cop0(const CodeBlockInstruction& cbi)
         }
 
         EmitStoreCPUStructField(offsetof(State, cop0_regs.sr.bits), sr);
+
+        Value cause_value = m_register_cache.AllocateScratch(RegSize_32);
+        EmitLoadCPUStructField(cause_value.host_reg, cause_value.size, offsetof(State, cop0_regs.cause.bits));
+
+        LabelType no_interrupt;
+        EmitAnd(sr.host_reg, sr.host_reg, cause_value);
+        EmitTest(sr.host_reg, Value::FromConstantU32(0xFF00));
+        EmitConditionalBranch(Condition::Zero, false, &no_interrupt);
+        EmitStoreCPUStructField(offsetof(State, downcount), Value::FromConstantU32(0));
+        EmitBindLabel(&no_interrupt);
 
         InstructionEpilogue(cbi);
         return true;

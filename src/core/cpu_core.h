@@ -79,8 +79,8 @@ struct State
   // GTE registers are stored here so we can access them on ARM with a single instruction
   GTE::Regs gte_regs = {};
 
-  // data cache (used as scratchpad)
-  std::array<u8, DCACHE_SIZE> dcache = {};
+  u8* fastmem_base = nullptr;
+
   std::array<u32, ICACHE_LINES> icache_tags = {};
   std::array<u8, ICACHE_SIZE> icache_data = {};
 };

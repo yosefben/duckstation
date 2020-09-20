@@ -727,12 +727,14 @@ bool Initialize(bool force_software_renderer)
   TimingEvents::Initialize();
 
   CPU::Initialize();
-  CPU::CodeCache::Initialize(g_settings.cpu_execution_mode == CPUExecutionMode::Recompiler);
-  Bus::Initialize();
+
+  if (!Bus::Initialize())
+    return false;
+
+  CPU::CodeCache::Initialize();
 
   g_gpu.Initialize();
   g_dma.Initialize();
-
   g_interrupt_controller.Initialize();
 
   g_cdrom.Initialize();

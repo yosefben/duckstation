@@ -6,6 +6,7 @@
 #include "cpu_recompiler_code_generator.h"
 #include "cpu_recompiler_thunks.h"
 #include "settings.h"
+#include "timing_event.h"
 Log_SetChannel(CPU::Recompiler);
 
 namespace a64 = vixl::aarch64;
@@ -13,6 +14,7 @@ namespace a64 = vixl::aarch64;
 namespace CPU::Recompiler {
 
 constexpr HostReg RCPUPTR = 19;
+constexpr HostReg RMEMBASEPTR = 20;
 constexpr HostReg RRETURN = 0;
 constexpr HostReg RARG1 = 0;
 constexpr HostReg RARG2 = 1;
@@ -25,6 +27,16 @@ constexpr u64 FUNCTION_CALLEE_SAVED_SPACE_RESERVE = 80;  // 8 registers
 constexpr u64 FUNCTION_CALLER_SAVED_SPACE_RESERVE = 144; // 18 registers -> 224 bytes
 constexpr u64 FUNCTION_STACK_SIZE =
   FUNCTION_CALLEE_SAVED_SPACE_RESERVE + FUNCTION_CALLER_SAVED_SPACE_RESERVE + FUNCTION_CALL_SHADOW_SPACE;
+
+// PC we return to after the end of the block
+static void* s_dispatcher_return_address;
+
+static s64 GetPCDisplacement(const void* current, const void* target)
+{
+  Assert(Common::IsAlignedPow2(reinterpret_cast<size_t>(current), 4));
+  Assert(Common::IsAlignedPow2(reinterpret_cast<size_t>(target), 4));
+  return static_cast<s64>((reinterpret_cast<ptrdiff_t>(target) - reinterpret_cast<ptrdiff_t>(current)) >> 2);
+}
 
 static const a64::WRegister GetHostReg8(HostReg reg)
 {
@@ -73,6 +85,11 @@ static const a64::XRegister GetHostReg64(const Value& value)
 static const a64::XRegister GetCPUPtrReg()
 {
   return GetHostReg64(RCPUPTR);
+}
+
+static const a64::XRegister GetFastmemBasePtrReg()
+{
+  return GetHostReg64(RMEMBASEPTR);
 }
 
 CodeGenerator::CodeGenerator(JitCodeBuffer* code_buffer)
@@ -172,19 +189,31 @@ void CodeGenerator::EmitBeginBlock()
   // Save the link register, since we'll be calling functions.
   const bool link_reg_allocated = m_register_cache.AllocateHostReg(30);
   DebugAssert(link_reg_allocated);
+  m_register_cache.AssumeCalleeSavedRegistersAreSaved();
 
   // Store the CPU struct pointer. TODO: make this better.
   const bool cpu_reg_allocated = m_register_cache.AllocateHostReg(RCPUPTR);
   DebugAssert(cpu_reg_allocated);
-  m_emit->Mov(GetCPUPtrReg(), reinterpret_cast<size_t>(&g_state));
+
+  // If there's loadstore instructions, preload the fastmem base.
+  if (m_block->contains_loadstore_instructions)
+  {
+    const bool fastmem_reg_allocated = m_register_cache.AllocateHostReg(RMEMBASEPTR);
+    Assert(fastmem_reg_allocated);
+    m_emit->Ldr(GetFastmemBasePtrReg(), a64::MemOperand(GetCPUPtrReg(), offsetof(State, fastmem_base)));
+  }
 }
 
 void CodeGenerator::EmitEndBlock()
 {
+  if (m_block->contains_loadstore_instructions)
+    m_register_cache.FreeHostReg(RMEMBASEPTR);
+
   m_register_cache.FreeHostReg(RCPUPTR);
   m_register_cache.PopCalleeSavedRegisters(true);
 
   m_emit->Add(a64::sp, a64::sp, FUNCTION_STACK_SIZE);
+  // m_emit->b(GetPCDisplacement(GetCurrentCodePointer(), s_dispatcher_return_address));
   m_emit->Ret();
 }
 
@@ -200,6 +229,7 @@ void CodeGenerator::EmitExceptionExit()
   m_register_cache.PopCalleeSavedRegisters(false);
 
   m_emit->Add(a64::sp, a64::sp, FUNCTION_STACK_SIZE);
+  // m_emit->b(GetPCDisplacement(GetCurrentCodePointer(), s_dispatcher_return_address));
   m_emit->Ret();
 }
 
@@ -958,13 +988,6 @@ void CodeGenerator::RestoreStackAfterCall(u32 adjust_size)
   m_register_cache.PopCallerSavedRegisters();
 }
 
-static s64 GetBranchDisplacement(const void* current, const void* target)
-{
-  Assert(Common::IsAlignedPow2(reinterpret_cast<size_t>(current), 4));
-  Assert(Common::IsAlignedPow2(reinterpret_cast<size_t>(target), 4));
-  return static_cast<s64>((reinterpret_cast<ptrdiff_t>(target) - reinterpret_cast<ptrdiff_t>(current)) >> 2);
-}
-
 void CodeGenerator::EmitFunctionCallPtr(Value* return_value, const void* ptr)
 {
   if (return_value)
@@ -974,7 +997,7 @@ void CodeGenerator::EmitFunctionCallPtr(Value* return_value, const void* ptr)
   const u32 adjust_size = PrepareStackForCall();
 
   // actually call the function
-  const s64 displacement = GetBranchDisplacement(GetCurrentCodePointer(), ptr);
+  const s64 displacement = GetPCDisplacement(GetCurrentCodePointer(), ptr);
   const bool use_blr = !vixl::IsInt26(displacement);
   if (use_blr)
   {
@@ -1009,7 +1032,7 @@ void CodeGenerator::EmitFunctionCallPtr(Value* return_value, const void* ptr, co
   EmitCopyValue(RARG1, arg1);
 
   // actually call the function
-  const s64 displacement = GetBranchDisplacement(GetCurrentCodePointer(), ptr);
+  const s64 displacement = GetPCDisplacement(GetCurrentCodePointer(), ptr);
   const bool use_blr = !vixl::IsInt26(displacement);
   if (use_blr)
   {
@@ -1045,7 +1068,7 @@ void CodeGenerator::EmitFunctionCallPtr(Value* return_value, const void* ptr, co
   EmitCopyValue(RARG2, arg2);
 
   // actually call the function
-  const s64 displacement = GetBranchDisplacement(GetCurrentCodePointer(), ptr);
+  const s64 displacement = GetPCDisplacement(GetCurrentCodePointer(), ptr);
   const bool use_blr = !vixl::IsInt26(displacement);
   if (use_blr)
   {
@@ -1083,7 +1106,7 @@ void CodeGenerator::EmitFunctionCallPtr(Value* return_value, const void* ptr, co
   EmitCopyValue(RARG3, arg3);
 
   // actually call the function
-  const s64 displacement = GetBranchDisplacement(GetCurrentCodePointer(), ptr);
+  const s64 displacement = GetPCDisplacement(GetCurrentCodePointer(), ptr);
   const bool use_blr = !vixl::IsInt26(displacement);
   if (use_blr)
   {
@@ -1122,7 +1145,7 @@ void CodeGenerator::EmitFunctionCallPtr(Value* return_value, const void* ptr, co
   EmitCopyValue(RARG4, arg4);
 
   // actually call the function
-  const s64 displacement = GetBranchDisplacement(GetCurrentCodePointer(), ptr);
+  const s64 displacement = GetPCDisplacement(GetCurrentCodePointer(), ptr);
   const bool use_blr = !vixl::IsInt26(displacement);
   if (use_blr)
   {
@@ -1283,14 +1306,124 @@ void CodeGenerator::EmitAddCPUStructField(u32 offset, const Value& value)
 
 Value CodeGenerator::EmitLoadGuestMemory(const CodeBlockInstruction& cbi, const Value& address, RegSize size)
 {
+  if (address.IsConstant())
+  {
+    TickCount read_ticks;
+    void* ptr = GetDirectReadMemoryPointer(
+      static_cast<u32>(address.constant_value),
+      (size == RegSize_8) ? MemoryAccessSize::Byte :
+                            ((size == RegSize_16) ? MemoryAccessSize::HalfWord : MemoryAccessSize::Word),
+      &read_ticks);
+    if (ptr)
+    {
+      Value result = m_register_cache.AllocateScratch(size);
+      EmitLoadGlobal(result.GetHostRegister(), size, ptr);
+      m_delayed_cycles_add += read_ticks;
+      return result;
+    }
+  }
+
   AddPendingCycles(true);
 
+  Value result = m_register_cache.AllocateScratch(RegSize_64);
+  if (g_settings.IsUsingFastmem())
+  {
+    EmitLoadGuestMemoryFastmem(cbi, address, size, result);
+  }
+  else
+  {
+    m_register_cache.FlushCallerSavedGuestRegisters(true, true);
+    EmitLoadGuestMemorySlowmem(cbi, address, size, result, false);
+  }
+
+  // Downcast to ignore upper 56/48/32 bits. This should be a noop.
+  switch (size)
+  {
+    case RegSize_8:
+      ConvertValueSizeInPlace(&result, RegSize_8, false);
+      break;
+
+    case RegSize_16:
+      ConvertValueSizeInPlace(&result, RegSize_16, false);
+      break;
+
+    case RegSize_32:
+      ConvertValueSizeInPlace(&result, RegSize_32, false);
+      break;
+
+    default:
+      UnreachableCode();
+      break;
+  }
+
+  return result;
+}
+
+void CodeGenerator::EmitLoadGuestMemoryFastmem(const CodeBlockInstruction& cbi, const Value& address, RegSize size,
+                                               Value& result)
+{
+  // fastmem
+  LoadStoreBackpatchInfo bpi;
+  bpi.host_pc = GetCurrentNearCodePointer();
+  bpi.address_host_reg = HostReg_Invalid;
+  bpi.value_host_reg = result.host_reg;
+  bpi.guest_pc = m_current_instruction->pc;
+
+  a64::MemOperand actual_address;
+  if (address.IsConstant())
+  {
+    m_emit->Mov(GetHostReg32(result.host_reg), address.constant_value);
+    actual_address = a64::MemOperand(GetFastmemBasePtrReg(), GetHostReg32(result.host_reg));
+    bpi.host_pc = GetCurrentNearCodePointer();
+  }
+  else
+  {
+    actual_address = a64::MemOperand(GetFastmemBasePtrReg(), GetHostReg32(address));
+  }
+
+  // TODO: movsx/zx inline here
+  switch (size)
+  {
+    case RegSize_8:
+      m_emit->Ldrb(GetHostReg32(result.host_reg), actual_address);
+      break;
+
+    case RegSize_16:
+      m_emit->Ldrh(GetHostReg32(result.host_reg), actual_address);
+      break;
+
+    case RegSize_32:
+      m_emit->Ldr(GetHostReg32(result.host_reg), actual_address);
+      break;
+
+    default:
+      UnreachableCode();
+      break;
+  }
+
+  EmitAddCPUStructField(offsetof(State, pending_ticks), Value::FromConstantU32(Bus::RAM_READ_TICKS));
+
+  bpi.host_code_size = static_cast<u32>(
+    static_cast<ptrdiff_t>(static_cast<u8*>(GetCurrentNearCodePointer()) - static_cast<u8*>(bpi.host_pc)));
+
+  // generate slowmem fallback
+  bpi.host_slowmem_pc = GetCurrentFarCodePointer();
+  SwitchToFarCode();
+  EmitLoadGuestMemorySlowmem(cbi, address, size, result, true);
+
+  // return to the block code
+  EmitBranch(GetCurrentNearCodePointer(), false);
+
+  SwitchToNearCode();
+
+  m_block->loadstore_backpatch_info.push_back(bpi);
+}
+
+void CodeGenerator::EmitLoadGuestMemorySlowmem(const CodeBlockInstruction& cbi, const Value& address, RegSize size,
+                                               Value& result, bool in_far_code)
+{
   if (g_settings.cpu_recompiler_memory_exceptions)
   {
-    // We need to use the full 64 bits here since we test the sign bit result.
-    Value result = m_register_cache.AllocateScratch(RegSize_64);
-    m_register_cache.FlushCallerSavedGuestRegisters(true, true);
-
     // NOTE: This can leave junk in the upper bits
     switch (size)
     {
@@ -1319,7 +1452,8 @@ Value CodeGenerator::EmitLoadGuestMemory(const CodeBlockInstruction& cbi, const 
     m_emit->Bind(&load_okay);
 
     // load exception path
-    SwitchToFarCode();
+    if (!in_far_code)
+      SwitchToFarCode();
 
     // cause_bits = (-result << 2) | BD | cop_n
     m_emit->neg(GetHostReg32(result.host_reg), GetHostReg32(result.host_reg));
@@ -1330,37 +1464,14 @@ Value CodeGenerator::EmitLoadGuestMemory(const CodeBlockInstruction& cbi, const 
     EmitFunctionCall(nullptr, static_cast<void (*)(u32, u32)>(&CPU::RaiseException), result, GetCurrentInstructionPC());
 
     EmitExceptionExit();
-    SwitchToNearCode();
+
+    if (!in_far_code)
+      SwitchToNearCode();
 
     m_register_cache.PopState();
-
-    // Downcast to ignore upper 56/48/32 bits. This should be a noop.
-    switch (size)
-    {
-      case RegSize_8:
-        ConvertValueSizeInPlace(&result, RegSize_8, false);
-        break;
-
-      case RegSize_16:
-        ConvertValueSizeInPlace(&result, RegSize_16, false);
-        break;
-
-      case RegSize_32:
-        ConvertValueSizeInPlace(&result, RegSize_32, false);
-        break;
-
-      default:
-        UnreachableCode();
-        break;
-    }
-
-    return result;
   }
   else
   {
-    Value result = m_register_cache.AllocateScratch(RegSize_32);
-    m_register_cache.FlushCallerSavedGuestRegisters(true, true);
-
     switch (size)
     {
       case RegSize_8:
@@ -1379,39 +1490,107 @@ Value CodeGenerator::EmitLoadGuestMemory(const CodeBlockInstruction& cbi, const 
         UnreachableCode();
         break;
     }
-
-    // Downcast to ignore upper 56/48/32 bits. This should be a noop.
-    switch (size)
-    {
-      case RegSize_8:
-        ConvertValueSizeInPlace(&result, RegSize_8, false);
-        break;
-
-      case RegSize_16:
-        ConvertValueSizeInPlace(&result, RegSize_16, false);
-        break;
-
-      case RegSize_32:
-        break;
-
-      default:
-        UnreachableCode();
-        break;
-    }
-
-    return result;
   }
 }
 
 void CodeGenerator::EmitStoreGuestMemory(const CodeBlockInstruction& cbi, const Value& address, const Value& value)
 {
+  if (address.IsConstant())
+  {
+    void* ptr = GetDirectWriteMemoryPointer(
+      static_cast<u32>(address.constant_value),
+      (value.size == RegSize_8) ? MemoryAccessSize::Byte :
+                                  ((value.size == RegSize_16) ? MemoryAccessSize::HalfWord : MemoryAccessSize::Word));
+    if (ptr)
+    {
+      EmitStoreGlobal(ptr, value);
+      return;
+    }
+  }
+
+  AddPendingCycles(true);
+
+  if (g_settings.IsUsingFastmem())
+  {
+    // we need the value in a host register to store it
+    Value value_in_hr = GetValueInHostRegister(value);
+    EmitStoreGuestMemoryFastmem(cbi, address, value_in_hr);
+  }
+  else
+  {
+    m_register_cache.FlushCallerSavedGuestRegisters(true, true);
+    EmitStoreGuestMemorySlowmem(cbi, address, value, false);
+  }
+}
+
+void CodeGenerator::EmitStoreGuestMemoryFastmem(const CodeBlockInstruction& cbi, const Value& address,
+                                                const Value& value)
+{
+  // fastmem
+  LoadStoreBackpatchInfo bpi;
+  bpi.host_pc = GetCurrentNearCodePointer();
+  bpi.address_host_reg = HostReg_Invalid;
+  bpi.value_host_reg = value.host_reg;
+  bpi.guest_pc = m_current_instruction->pc;
+
+  a64::MemOperand actual_address;
+  if (address.IsConstant())
+  {
+    m_emit->Mov(GetHostReg32(RSCRATCH), address.constant_value);
+    actual_address = a64::MemOperand(GetFastmemBasePtrReg(), GetHostReg32(RSCRATCH));
+    bpi.host_pc = GetCurrentNearCodePointer();
+  }
+  else
+  {
+    actual_address = a64::MemOperand(GetFastmemBasePtrReg(), GetHostReg32(address));
+  }
+
+  switch (value.size)
+  {
+    case RegSize_8:
+      m_emit->Strb(GetHostReg8(value), actual_address);
+      break;
+
+    case RegSize_16:
+      m_emit->Strh(GetHostReg16(value), actual_address);
+      break;
+
+    case RegSize_32:
+      m_emit->Str(GetHostReg32(value), actual_address);
+      break;
+
+    default:
+      UnreachableCode();
+      break;
+  }
+
+  bpi.host_code_size = static_cast<u32>(
+    static_cast<ptrdiff_t>(static_cast<u8*>(GetCurrentNearCodePointer()) - static_cast<u8*>(bpi.host_pc)));
+
+  // generate slowmem fallback
+  bpi.host_slowmem_pc = GetCurrentFarCodePointer();
+  SwitchToFarCode();
+
+  EmitStoreGuestMemorySlowmem(cbi, address, value, true);
+
+  // return to the block code
+  EmitBranch(GetCurrentNearCodePointer(), false);
+
+  SwitchToNearCode();
+
+  m_block->loadstore_backpatch_info.push_back(bpi);
+}
+
+void CodeGenerator::EmitStoreGuestMemorySlowmem(const CodeBlockInstruction& cbi, const Value& address,
+                                                const Value& value, bool in_far_code)
+{
   AddPendingCycles(true);
 
   if (g_settings.cpu_recompiler_memory_exceptions)
   {
-    Value result = m_register_cache.AllocateScratch(RegSize_32);
-    m_register_cache.FlushCallerSavedGuestRegisters(true, true);
+    Assert(!in_far_code);
 
+    Value result = m_register_cache.AllocateScratch(RegSize_32);
     switch (value.size)
     {
       case RegSize_8:
@@ -1439,7 +1618,8 @@ void CodeGenerator::EmitStoreGuestMemory(const CodeBlockInstruction& cbi, const 
     m_emit->Bind(&store_okay);
 
     // store exception path
-    SwitchToFarCode();
+    if (!in_far_code)
+      SwitchToFarCode();
 
     // cause_bits = (result << 2) | BD | cop_n
     m_emit->lsl(GetHostReg32(result.host_reg), GetHostReg32(result.host_reg), 2);
@@ -1448,15 +1628,14 @@ void CodeGenerator::EmitStoreGuestMemory(const CodeBlockInstruction& cbi, const 
              static_cast<Exception>(0), cbi.is_branch_delay_slot, false, cbi.instruction.cop.cop_n)));
     EmitFunctionCall(nullptr, static_cast<void (*)(u32, u32)>(&CPU::RaiseException), result, GetCurrentInstructionPC());
 
-    EmitExceptionExit();
+    if (!in_far_code)
+      EmitExceptionExit();
     SwitchToNearCode();
 
     m_register_cache.PopState();
   }
   else
   {
-    m_register_cache.FlushCallerSavedGuestRegisters(true, true);
-
     switch (value.size)
     {
       case RegSize_8:
@@ -1478,14 +1657,76 @@ void CodeGenerator::EmitStoreGuestMemory(const CodeBlockInstruction& cbi, const 
   }
 }
 
+bool CodeGenerator::BackpatchLoadStore(const LoadStoreBackpatchInfo& lbi)
+{
+  Log_DevPrintf("Backpatching %p (guest PC 0x%08X) to slowmem at %p", lbi.host_pc, lbi.guest_pc, lbi.host_slowmem_pc);
+
+  // check jump distance
+  const s64 jump_distance =
+    static_cast<s64>(reinterpret_cast<intptr_t>(lbi.host_slowmem_pc) - reinterpret_cast<intptr_t>(lbi.host_pc));
+  Assert(Common::IsAligned(jump_distance, 4));
+  Assert(a64::Instruction::IsValidImmPCOffset(a64::UncondBranchType, jump_distance >> 2));
+
+  // turn it into a jump to the slowmem handler
+  vixl::aarch64::MacroAssembler emit(static_cast<vixl::byte*>(lbi.host_pc), lbi.host_code_size,
+                                     a64::PositionDependentCode);
+  emit.b(jump_distance >> 2);
+
+  const s32 nops = (static_cast<s32>(lbi.host_code_size) - static_cast<s32>(emit.GetCursorOffset())) / 4;
+  Assert(nops >= 0);
+  for (s32 i = 0; i < nops; i++)
+    emit.nop();
+
+  JitCodeBuffer::FlushInstructionCache(lbi.host_pc, lbi.host_code_size);
+  return true;
+}
+
 void CodeGenerator::EmitLoadGlobal(HostReg host_reg, RegSize size, const void* ptr)
 {
-  Panic("Not implemented");
+  EmitLoadGlobalAddress(RSCRATCH, ptr);
+  switch (size)
+  {
+    case RegSize_8:
+      m_emit->Ldrb(GetHostReg8(host_reg), a64::MemOperand(GetHostReg64(RSCRATCH)));
+      break;
+
+    case RegSize_16:
+      m_emit->Ldrh(GetHostReg16(host_reg), a64::MemOperand(GetHostReg64(RSCRATCH)));
+      break;
+
+    case RegSize_32:
+      m_emit->Ldr(GetHostReg32(host_reg), a64::MemOperand(GetHostReg64(RSCRATCH)));
+      break;
+
+    default:
+      UnreachableCode();
+      break;
+  }
 }
 
 void CodeGenerator::EmitStoreGlobal(void* ptr, const Value& value)
 {
-  Panic("Not implemented");
+  Value value_in_hr = GetValueInHostRegister(value);
+
+  EmitLoadGlobalAddress(RSCRATCH, ptr);
+  switch (value.size)
+  {
+    case RegSize_8:
+      m_emit->Strb(GetHostReg8(value_in_hr), a64::MemOperand(GetHostReg64(RSCRATCH)));
+      break;
+
+    case RegSize_16:
+      m_emit->Strh(GetHostReg16(value_in_hr), a64::MemOperand(GetHostReg64(RSCRATCH)));
+      break;
+
+    case RegSize_32:
+      m_emit->Str(GetHostReg32(value_in_hr), a64::MemOperand(GetHostReg64(RSCRATCH)));
+      break;
+
+    default:
+      UnreachableCode();
+      break;
+  }
 }
 
 void CodeGenerator::EmitFlushInterpreterLoadDelay()
@@ -1812,6 +2053,138 @@ void CodeGenerator::EmitBranchIfBitClear(HostReg reg, RegSize size, u8 bit, Labe
 void CodeGenerator::EmitBindLabel(LabelType* label)
 {
   m_emit->Bind(label);
+}
+
+void CodeGenerator::EmitLoadGlobalAddress(HostReg host_reg, const void* ptr)
+{
+  const void* current_code_ptr_page = reinterpret_cast<const void*>(
+    reinterpret_cast<uintptr_t>(GetCurrentCodePointer()) & ~static_cast<uintptr_t>(0xFFF));
+  const void* ptr_page =
+    reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(ptr) & ~static_cast<uintptr_t>(0xFFF));
+  const s64 page_displacement = GetPCDisplacement(current_code_ptr_page, ptr_page) >> 10;
+  const u32 page_offset = static_cast<u32>(reinterpret_cast<uintptr_t>(ptr) & 0xFFFu);
+  if (vixl::IsInt21(page_displacement) && a64::Assembler::IsImmLogical(page_offset, 64))
+  {
+    m_emit->adrp(GetHostReg64(host_reg), page_displacement);
+    m_emit->orr(GetHostReg64(host_reg), GetHostReg64(host_reg), page_offset);
+  }
+  else
+  {
+    m_emit->Mov(GetHostReg64(host_reg), reinterpret_cast<uintptr_t>(ptr));
+  }
+}
+
+CodeBlock::HostCodePointer CodeGenerator::CompileDispatcher()
+{
+  m_emit->Sub(a64::sp, a64::sp, FUNCTION_STACK_SIZE);
+  m_register_cache.ReserveCallerSavedRegisters();
+
+  EmitLoadGlobalAddress(RCPUPTR, &g_state);
+
+  a64::Label frame_done_loop;
+  a64::Label exit_dispatcher;
+  m_emit->Bind(&frame_done_loop);
+
+  // if frame_done goto exit_dispatcher
+  m_emit->ldrb(a64::w8, a64::MemOperand(GetHostReg64(RCPUPTR), offsetof(State, frame_done)));
+  m_emit->tbnz(a64::w8, 0, &exit_dispatcher);
+
+  // x8 <- sr
+  a64::Label no_interrupt;
+  m_emit->ldr(a64::w8, a64::MemOperand(GetHostReg64(RCPUPTR), offsetof(State, cop0_regs.sr.bits)));
+
+  // if Iec == 0 then goto no_interrupt
+  m_emit->tbz(a64::w8, 0, &no_interrupt);
+
+  // x9 <- cause
+  // x8 (sr) & cause
+  m_emit->ldr(a64::w9, a64::MemOperand(GetHostReg64(RCPUPTR), offsetof(State, cop0_regs.cause.bits)));
+  m_emit->and_(a64::w8, a64::w8, a64::w9);
+
+  // ((sr & cause) & 0xff00) == 0 goto no_interrupt
+  m_emit->tst(a64::w8, 0xFF00);
+  m_emit->b(&no_interrupt, a64::eq);
+
+  // we have an interrupt
+  EmitFunctionCall(nullptr, &DispatchInterrupt);
+
+  // no interrupt or we just serviced it
+  m_emit->Bind(&no_interrupt);
+
+  // TimingEvents::UpdateCPUDowncount:
+  // x8 <- head event->downcount
+  // downcount <- x8
+  EmitLoadGlobalAddress(8, TimingEvents::GetHeadEventPtr());
+  m_emit->ldr(a64::x8, a64::MemOperand(a64::x8));
+  m_emit->ldr(a64::w8, a64::MemOperand(a64::x8, offsetof(TimingEvent, m_downcount)));
+  m_emit->str(a64::w8, a64::MemOperand(GetHostReg64(RCPUPTR), offsetof(State, downcount)));
+
+  // main dispatch loop
+  a64::Label main_loop;
+  m_emit->Bind(&main_loop);
+  s_dispatcher_return_address = GetCurrentCodePointer();
+
+  // w8 <- pending_ticks
+  // w9 <- downcount
+  m_emit->ldr(a64::w8, a64::MemOperand(GetHostReg64(RCPUPTR), offsetof(State, pending_ticks)));
+  m_emit->ldr(a64::w9, a64::MemOperand(GetHostReg64(RCPUPTR), offsetof(State, downcount)));
+
+  // while downcount < pending_ticks
+  a64::Label downcount_hit;
+  m_emit->cmp(a64::w8, a64::w9);
+  m_emit->b(&downcount_hit, a64::ge);
+
+  // time to lookup the block
+  // w8 <- pc
+  m_emit->ldr(a64::w8, a64::MemOperand(GetHostReg64(RCPUPTR), offsetof(State, regs.pc)));
+
+  // w9 <- (pc & RAM_MASK) >> 2
+  m_emit->and_(a64::w9, a64::w8, Bus::RAM_MASK);
+  m_emit->lsr(a64::w9, a64::w9, 2);
+
+  // w10 <- ((pc & BIOS_MASK) >> 2) + FAST_MAP_RAM_SLOT_COUNT
+  m_emit->and_(a64::w10, a64::w8, Bus::BIOS_MASK);
+  m_emit->lsr(a64::w10, a64::w10, 2);
+  m_emit->add(a64::w10, a64::w10, FAST_MAP_RAM_SLOT_COUNT);
+
+  // current_instruction_pc <- pc (eax)
+  m_emit->str(a64::w8, a64::MemOperand(GetHostReg64(RCPUPTR), offsetof(State, current_instruction_pc)));
+
+  // if ((w8 (pc) & PHYSICAL_MEMORY_ADDRESS_MASK) >= BIOS_BASE) { use w10 as index }
+  m_emit->and_(a64::w8, a64::w8, PHYSICAL_MEMORY_ADDRESS_MASK);
+  m_emit->Mov(a64::w11, Bus::BIOS_BASE);
+  m_emit->cmp(a64::w8, a64::w11);
+  m_emit->csel(a64::w8, a64::w9, a64::w10, a64::lt);
+
+  // ebx contains our index, rax <- fast_map[ebx * 8], rax(), continue
+  EmitLoadGlobalAddress(9, CodeCache::GetFastMapPointer());
+  m_emit->ldr(a64::x8, a64::MemOperand(a64::x9, a64::x8, a64::LSL, 3));
+  m_emit->blr(a64::x8);
+
+  // end while
+  m_emit->Bind(&downcount_hit);
+
+  // check events then for frame done
+  m_emit->ldr(a64::w8, a64::MemOperand(GetHostReg64(RCPUPTR), offsetof(State, pending_ticks)));
+  EmitLoadGlobalAddress(9, TimingEvents::GetHeadEventPtr());
+  m_emit->ldr(a64::x9, a64::MemOperand(a64::x9));
+  m_emit->ldr(a64::w9, a64::MemOperand(a64::x9, offsetof(TimingEvent, m_downcount)));
+  m_emit->cmp(a64::w8, a64::w9);
+  m_emit->b(&frame_done_loop, a64::lt);
+  EmitFunctionCall(nullptr, &TimingEvents::RunEvents);
+  m_emit->b(&frame_done_loop);
+
+  // all done
+  m_emit->Bind(&exit_dispatcher);
+  m_register_cache.PopCalleeSavedRegisters(true);
+  m_emit->Add(a64::sp, a64::sp, FUNCTION_STACK_SIZE);
+  m_emit->Ret();
+
+  CodeBlock::HostCodePointer ptr;
+  u32 code_size;
+  FinalizeBlock(&ptr, &code_size);
+  Log_InfoPrintf("Dispatcher is %u bytes at %p", code_size, ptr);
+  return ptr;
 }
 
 } // namespace CPU::Recompiler
