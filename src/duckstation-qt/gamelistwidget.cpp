@@ -9,6 +9,7 @@
 #include <QtGui/QPixmap>
 #include <QtWidgets/QHeaderView>
 #include <QtWidgets/QMenu>
+#include <QtWidgets/QShortcut>
 
 class GameListSortModel final : public QSortFilterProxyModel
 {
@@ -42,9 +43,9 @@ void GameListWidget::initialize(QtHostInterface* host_interface)
 
   connect(m_host_interface, &QtHostInterface::gameListRefreshed, this, &GameListWidget::onGameListRefreshed);
 
-  m_table_model = new GameListModel(m_game_list, this);
-  m_table_sort_model = new GameListSortModel(m_table_model);
-  m_table_sort_model->setSourceModel(m_table_model);
+  m_model = new GameListModel(m_game_list, this);
+  m_table_sort_model = new GameListSortModel(m_model);
+  m_table_sort_model->setSourceModel(m_model);
   m_table_view = new QTableView(this);
   m_table_view->setModel(m_table_sort_model);
   m_table_view->setSortingEnabled(true);
@@ -73,14 +74,31 @@ void GameListWidget::initialize(QtHostInterface* host_interface)
           &GameListWidget::onTableViewHeaderSortIndicatorChanged);
 
   insertWidget(0, m_table_view);
-  setCurrentIndex(0);
+
+  m_list_view = new QListView(this);
+  m_list_view->setModel(m_model);
+  m_list_view->setModelColumn(GameListModel::Column_Cover);
+  m_list_view->setSelectionMode(QAbstractItemView::ExtendedSelection);
+  m_list_view->setViewMode(QListView::IconMode);
+  m_list_view->setResizeMode(QListView::Adjust);
+  m_list_view->setUniformItemSizes(true);
+  m_list_view->setContextMenuPolicy(Qt::CustomContextMenu);
+  m_list_view->setFrameStyle(QFrame::NoFrame);
+  m_list_view->setSpacing(m_model->getCoverArtSpacing());
+
+  connect(new QShortcut(QKeySequence::ZoomIn, this), &QShortcut::activated, this, &GameListWidget::listZoomIn);
+  connect(new QShortcut(QKeySequence::ZoomOut, this), &QShortcut::activated, this, &GameListWidget::listZoomOut);
+
+  insertWidget(1, m_list_view);
+
+  setCurrentIndex(1);
 
   resizeTableViewColumnsToFit();
 }
 
 void GameListWidget::onGameListRefreshed()
 {
-  m_table_model->refresh();
+  m_model->refresh();
 }
 
 void GameListWidget::onSelectionModelCurrentChanged(const QModelIndex& current, const QModelIndex& previous)
@@ -121,7 +139,7 @@ void GameListWidget::onTableViewHeaderContextMenuRequested(const QPoint& point)
 
   for (int column = 0; column < GameListModel::Column_Count; column++)
   {
-    QAction* action = menu.addAction(m_table_model->getColumnDisplayName(column));
+    QAction* action = menu.addAction(m_model->getColumnDisplayName(column));
     action->setCheckable(true);
     action->setChecked(!m_table_view->isColumnHidden(column));
     connect(action, &QAction::toggled, [this, column](bool enabled) {
@@ -137,6 +155,30 @@ void GameListWidget::onTableViewHeaderContextMenuRequested(const QPoint& point)
 void GameListWidget::onTableViewHeaderSortIndicatorChanged(int, Qt::SortOrder)
 {
   saveTableViewColumnSortSettings();
+}
+
+void GameListWidget::listZoom(float delta)
+{
+  static constexpr float MIN_SCALE = 0.1f;
+  static constexpr float MAX_SCALE = 2.0f;
+
+  const float new_scale = std::clamp(m_model->getCoverScale() + delta, MIN_SCALE, MAX_SCALE);
+  m_model->setCoverScale(new_scale);
+  m_model->refresh();
+
+  QFont font;
+  font.setPointSizeF(font.pointSizeF() * new_scale);
+  m_list_view->setFont(font);
+}
+
+void GameListWidget::listZoomIn()
+{
+  listZoom(0.05f);
+}
+
+void GameListWidget::listZoomOut()
+{
+  listZoom(-0.05f);
 }
 
 void GameListWidget::resizeEvent(QResizeEvent* event)

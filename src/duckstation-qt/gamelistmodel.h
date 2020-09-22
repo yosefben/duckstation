@@ -4,7 +4,9 @@
 #include <QtCore/QAbstractTableModel>
 #include <QtGui/QPixmap>
 #include <array>
+#include <algorithm>
 #include <optional>
+#include <unordered_map>
 
 class GameListModel final : public QAbstractTableModel
 {
@@ -20,6 +22,7 @@ public:
     Column_Size,
     Column_Region,
     Column_Compatibility,
+    Column_Cover,
 
     Column_Count
   };
@@ -43,11 +46,19 @@ public:
 
   bool lessThan(const QModelIndex& left_index, const QModelIndex& right_index, int column, bool ascending) const;
 
+  const float getCoverScale() const { return m_cover_scale; }
+  void setCoverScale(float scale);
+  int getCoverArtWidth() const;
+  int getCoverArtHeight() const;
+  int getCoverArtSpacing() const;
+
 private:
+
   void loadCommonImages();
   void setColumnDisplayNames();
 
   GameList* m_game_list;
+  float m_cover_scale = 0.5f;
 
   std::array<QString, Column_Count> m_column_display_names;
 
@@ -59,5 +70,8 @@ private:
   QPixmap m_region_eu_pixmap;
   QPixmap m_region_us_pixmap;
 
+  QPixmap m_no_image_cover_art;
+
   std::array<QPixmap, static_cast<int>(GameListCompatibilityRating::Count)> m_compatibiliy_pixmaps;
+  mutable std::unordered_map<std::string, QPixmap> m_cover_pixmap_cache;
 };

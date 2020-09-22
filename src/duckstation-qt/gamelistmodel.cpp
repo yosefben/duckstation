@@ -2,9 +2,14 @@
 #include "common/string_util.h"
 #include "core/system.h"
 #include <QtGui/QIcon>
+#include <QtGui/QPainter>
 
 static constexpr std::array<const char*, GameListModel::Column_Count> s_column_names = {
-  {"Type", "Code", "Title", "File Title", "Size", "Region", "Compatibility"}};
+  {"Type", "Code", "Title", "File Title", "Size", "Region", "Compatibility", "Cover"}};
+
+static constexpr int COVER_ART_WIDTH = 512;
+static constexpr int COVER_ART_HEIGHT = 512;
+static constexpr int COVER_ART_SPACING = 32;
 
 std::optional<GameListModel::Column> GameListModel::getColumnIdForName(std::string_view name)
 {
@@ -23,12 +28,37 @@ const char* GameListModel::getColumnName(Column col)
 }
 
 GameListModel::GameListModel(GameList* game_list, QObject* parent /* = nullptr */)
-  : QAbstractTableModel(parent), m_game_list(game_list)
+  : QAbstractTableModel(parent), m_game_list(game_list), m_no_image_cover_art(COVER_ART_WIDTH, COVER_ART_HEIGHT)
 {
   loadCommonImages();
   setColumnDisplayNames();
 }
 GameListModel::~GameListModel() = default;
+
+void GameListModel::setCoverScale(float scale)
+{
+  if (m_cover_scale == scale)
+    return;
+
+  m_no_image_cover_art = QPixmap(getCoverArtWidth(), getCoverArtHeight());
+  m_cover_pixmap_cache.clear();
+  m_cover_scale = scale;
+}
+
+int GameListModel::getCoverArtWidth() const
+{
+  return std::max(static_cast<int>(static_cast<float>(COVER_ART_WIDTH) * m_cover_scale), 1);
+}
+
+int GameListModel::getCoverArtHeight() const
+{
+  return std::max(static_cast<int>(static_cast<float>(COVER_ART_HEIGHT) * m_cover_scale), 1);
+}
+
+int GameListModel::getCoverArtSpacing() const
+{
+  return std::max(static_cast<int>(static_cast<float>(COVER_ART_SPACING) * m_cover_scale), 1);
+}
 
 int GameListModel::rowCount(const QModelIndex& parent) const
 {
@@ -67,6 +97,7 @@ QVariant GameListModel::data(const QModelIndex& index, int role) const
           return QString::fromStdString(ge.code);
 
         case Column_Title:
+        case Column_Cover:
           return QString::fromStdString(ge.title);
 
         case Column_FileTitle:
@@ -94,6 +125,7 @@ QVariant GameListModel::data(const QModelIndex& index, int role) const
           return QString::fromStdString(ge.code);
 
         case Column_Title:
+        case Column_Cover:
           return QString::fromStdString(ge.title);
 
         case Column_FileTitle:
@@ -154,6 +186,58 @@ QVariant GameListModel::data(const QModelIndex& index, int role) const
             (ge.compatibility_rating >= GameListCompatibilityRating::Count) ? GameListCompatibilityRating::Unknown :
                                                                               ge.compatibility_rating)];
         }
+
+        case Column_Cover:
+        {
+          std::string path = m_game_list->GetCoverImagePathForEntry(&ge);
+          if (path.empty())
+            return m_no_image_cover_art;
+
+          auto it = m_cover_pixmap_cache.find(path);
+          if (it != m_cover_pixmap_cache.end())
+            return it->second;
+
+          auto image = QPixmap(QString::fromStdString(path));
+          if (image.isNull())
+            image = m_no_image_cover_art;
+
+          const int expected_width = getCoverArtWidth();
+          const int expected_height = getCoverArtHeight();
+          if (image.width() != expected_width || image.height() != expected_height)
+          {
+            image = image.scaled(expected_width, expected_height, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            if (image.width() != expected_width || image.height() != expected_height)
+            {
+              int xoffs = 0;
+              int yoffs = 0;
+              if (image.width() < expected_width)
+                xoffs = (expected_width - image.width()) / 2;
+              if (image.height() < expected_height)
+                yoffs = (expected_height - image.height()) / 2;
+
+              QPixmap padded_image(expected_width, expected_height);
+              padded_image.fill(Qt::transparent);
+              QPainter painter;
+              if (painter.begin(&padded_image))
+              {
+                painter.setCompositionMode(QPainter::CompositionMode_Source);
+                painter.drawPixmap(xoffs, yoffs, image);
+                painter.setCompositionMode(QPainter::CompositionMode_Destination);
+                painter.fillRect(padded_image.rect(), QColor(0, 0, 0, 0));
+                painter.end();
+              }
+
+              image = padded_image;
+            }
+          }
+
+          int cw = image.width();
+          int ch = image.height();
+
+          m_cover_pixmap_cache.emplace(std::move(path), image);
+          return image;
+        }
+        break;
 
         default:
           return {};
