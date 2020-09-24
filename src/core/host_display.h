@@ -8,14 +8,30 @@
 #include <vector>
 
 // An abstracted RGBA8 texture.
+
 class HostDisplayTexture
 {
 public:
+  enum class Format
+  {
+    RGBA8,
+    RGB5551
+  };
+
+  enum class MapMode
+  {
+    Read,
+    Write
+  };
+
   virtual ~HostDisplayTexture();
 
   virtual void* GetHandle() const = 0;
   virtual u32 GetWidth() const = 0;
   virtual u32 GetHeight() const = 0;
+  virtual Format GetFormat() const = 0;
+
+  static u32 GetTexelSize(Format format);
 };
 
 // Interface to the frontend's renderer.
@@ -75,13 +91,17 @@ public:
   virtual void ResizeRenderWindow(s32 new_window_width, s32 new_window_height) = 0;
 
   /// Creates an abstracted RGBA8 texture. If dynamic, the texture can be updated with UpdateTexture() below.
-  virtual std::unique_ptr<HostDisplayTexture> CreateTexture(u32 width, u32 height, const void* data, u32 data_stride,
+  virtual std::unique_ptr<HostDisplayTexture> CreateTexture(u32 width, u32 height, HostDisplayTexture::Format format,
+                                                            const void* data, u32 data_stride,
                                                             bool dynamic = false) = 0;
   virtual void UpdateTexture(HostDisplayTexture* texture, u32 x, u32 y, u32 width, u32 height, const void* data,
                              u32 data_stride) = 0;
 
   virtual bool DownloadTexture(const void* texture_handle, u32 x, u32 y, u32 width, u32 height, void* out_data,
                                u32 out_data_stride) = 0;
+  virtual bool MapTexture(HostDisplayTexture* texture, HostDisplayTexture::MapMode mode, void** out_ptr,
+                          u32* out_stride) = 0;
+  virtual void UnmapTexture(HostDisplayTexture* texture) = 0;
 
   /// Returns false if the window was completely occluded.
   virtual bool Render() = 0;

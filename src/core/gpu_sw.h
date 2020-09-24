@@ -49,6 +49,8 @@ protected:
   //////////////////////////////////////////////////////////////////////////
   void CopyOut15Bit(u32 src_x, u32 src_y, u32* dst_ptr, u32 dst_stride, u32 width, u32 height, bool interlaced,
                     bool interleaved);
+  void CopyOut15Bit(u32 src_x, u32 src_y, u16* dst_ptr, u32 dst_stride, u32 width, u32 height, bool interlaced,
+                    bool interleaved);
   void CopyOut24Bit(u32 src_x, u32 src_y, u32* dst_ptr, u32 dst_stride, u32 width, u32 height, bool interlaced,
                     bool interleaved);
   void ClearDisplay() override;
@@ -118,7 +120,8 @@ protected:
   DrawLineFunction GetDrawLineFunction(bool shading_enable, bool transparency_enable, bool dithering_enable);
 
   std::vector<u32> m_display_texture_buffer;
-  std::unique_ptr<HostDisplayTexture> m_display_texture;
+  std::unique_ptr<HostDisplayTexture> m_16bit_display_texture;
+  std::unique_ptr<HostDisplayTexture> m_32bit_display_texture;
 
   std::array<u16, VRAM_WIDTH * VRAM_HEIGHT> m_vram;
 };

@@ -24,8 +24,8 @@ namespace FrontendCommon {
 class VulkanHostDisplayTexture : public HostDisplayTexture
 {
 public:
-  VulkanHostDisplayTexture(Vulkan::Texture texture, Vulkan::StagingTexture staging_texture)
-    : m_texture(std::move(texture)), m_staging_texture(std::move(staging_texture))
+  VulkanHostDisplayTexture(Vulkan::Texture texture, Vulkan::StagingTexture staging_texture, Format format)
+    : m_texture(std::move(texture)), m_staging_texture(std::move(staging_texture)), m_format(format)
   {
   }
   ~VulkanHostDisplayTexture() override = default;
@@ -33,20 +33,38 @@ public:
   void* GetHandle() const override { return const_cast<Vulkan::Texture*>(&m_texture); }
   u32 GetWidth() const override { return m_texture.GetWidth(); }
   u32 GetHeight() const override { return m_texture.GetHeight(); }
+  Format GetFormat() const override { return m_format; }
+
+  MapMode GetMapMode() const { return m_map_mode; }
+  void SetMapMode(MapMode mode) { m_map_mode = mode; }
 
   const Vulkan::Texture& GetTexture() const { return m_texture; }
   Vulkan::Texture& GetTexture() { return m_texture; }
   Vulkan::StagingTexture& GetStagingTexture() { return m_staging_texture; }
 
-  static std::unique_ptr<VulkanHostDisplayTexture> Create(u32 width, u32 height, const void* data, u32 data_stride,
-                                                          bool dynamic)
+  static std::unique_ptr<VulkanHostDisplayTexture> Create(u32 width, u32 height, Format format, const void* data,
+                                                          u32 data_stride, bool dynamic)
   {
-    static constexpr VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
+    VkFormat vk_format;
+    switch (format)
+    {
+      case Format::RGBA8:
+        vk_format = VK_FORMAT_R8G8B8A8_UNORM;
+        break;
+
+      case Format::RGB5551:
+        vk_format = VK_FORMAT_A1R5G5B5_UNORM_PACK16;
+        break;
+
+      default:
+        return {};
+    }
+
     static constexpr VkImageUsageFlags usage =
       VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
 
     Vulkan::Texture texture;
-    if (!texture.Create(width, height, 1, 1, format, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_VIEW_TYPE_2D,
+    if (!texture.Create(width, height, 1, 1, vk_format, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_VIEW_TYPE_2D,
                         VK_IMAGE_TILING_OPTIMAL, usage))
     {
       return {};
@@ -56,7 +74,7 @@ public:
     if (data || dynamic)
     {
       if (!staging_texture.Create(dynamic ? Vulkan::StagingBuffer::Type::Mutable : Vulkan::StagingBuffer::Type::Upload,
-                                  format, width, height))
+                                  vk_format, width, height))
       {
         return {};
       }
@@ -85,12 +103,14 @@ public:
     if (!dynamic)
       staging_texture.Destroy(true);
 
-    return std::make_unique<VulkanHostDisplayTexture>(std::move(texture), std::move(staging_texture));
+    return std::make_unique<VulkanHostDisplayTexture>(std::move(texture), std::move(staging_texture), format);
   }
 
 private:
   Vulkan::Texture m_texture;
   Vulkan::StagingTexture m_staging_texture;
+  Format m_format;
+  MapMode m_map_mode;
 };
 
 VulkanHostDisplay::VulkanHostDisplay() = default;
@@ -180,10 +200,12 @@ void VulkanHostDisplay::DestroyRenderSurface()
   m_swap_chain.reset();
 }
 
-std::unique_ptr<HostDisplayTexture> VulkanHostDisplay::CreateTexture(u32 width, u32 height, const void* data,
-                                                                     u32 data_stride, bool dynamic)
+std::unique_ptr<HostDisplayTexture> VulkanHostDisplay::CreateTexture(u32 width, u32 height,
+                                                                     HostDisplayTexture::Format format,
+                                                                     const void* initial_data, u32 initial_data_stride,
+                                                                     bool dynamic)
 {
-  return VulkanHostDisplayTexture::Create(width, height, data, data_stride, dynamic);
+  return VulkanHostDisplayTexture::Create(width, height, format, initial_data, initial_data_stride, dynamic);
 }
 
 void VulkanHostDisplay::UpdateTexture(HostDisplayTexture* texture, u32 x, u32 y, u32 width, u32 height,
@@ -230,6 +252,34 @@ bool VulkanHostDisplay::DownloadTexture(const void* texture_handle, u32 x, u32 y
   m_readback_staging_texture.CopyFromTexture(*texture, x, y, 0, 0, 0, 0, width, height);
   m_readback_staging_texture.ReadTexels(0, 0, width, height, out_data, out_data_stride);
   return true;
+}
+
+bool VulkanHostDisplay::MapTexture(HostDisplayTexture* texture, HostDisplayTexture::MapMode mode, void** out_ptr,
+                                   u32* out_stride)
+{
+  VulkanHostDisplayTexture* vk_texture = static_cast<VulkanHostDisplayTexture*>(texture);
+
+  if (mode == HostDisplayTexture::MapMode::Read)
+  {
+    vk_texture->GetStagingTexture().CopyFromTexture(vk_texture->GetTexture(), 0, 0, 0, 0, 0, 0, vk_texture->GetWidth(),
+                                                    vk_texture->GetHeight());
+    vk_texture->GetStagingTexture().Flush();
+  }
+
+  vk_texture->SetMapMode(mode);
+  *out_ptr = vk_texture->GetStagingTexture().GetMappedPointer();
+  *out_stride = vk_texture->GetStagingTexture().GetMappedStride();
+  return true;
+}
+
+void VulkanHostDisplay::UnmapTexture(HostDisplayTexture* texture)
+{
+  VulkanHostDisplayTexture* vk_texture = static_cast<VulkanHostDisplayTexture*>(texture);
+  if (vk_texture->GetMapMode() == HostDisplayTexture::MapMode::Write)
+  {
+    vk_texture->GetStagingTexture().CopyToTexture(0, 0, vk_texture->GetTexture(), 0, 0, 0, 0, vk_texture->GetWidth(),
+                                                  vk_texture->GetHeight());
+  }
 }
 
 void VulkanHostDisplay::SetVSync(bool enabled)

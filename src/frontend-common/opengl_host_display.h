@@ -48,12 +48,16 @@ public:
 
   virtual bool SetPostProcessingChain(const std::string_view& config) override;
 
-  std::unique_ptr<HostDisplayTexture> CreateTexture(u32 width, u32 height, const void* initial_data,
-                                                    u32 initial_data_stride, bool dynamic) override;
+  std::unique_ptr<HostDisplayTexture> CreateTexture(u32 width, u32 height, HostDisplayTexture::Format format,
+                                                    const void* initial_data, u32 initial_data_stride,
+                                                    bool dynamic) override;
   void UpdateTexture(HostDisplayTexture* texture, u32 x, u32 y, u32 width, u32 height, const void* texture_data,
                      u32 texture_data_stride) override;
   bool DownloadTexture(const void* texture_handle, u32 x, u32 y, u32 width, u32 height, void* out_data,
                        u32 out_data_stride) override;
+  bool MapTexture(HostDisplayTexture* texture, HostDisplayTexture::MapMode mode, void** out_ptr,
+                  u32* out_stride) override;
+  void UnmapTexture(HostDisplayTexture* texture);
 
   virtual void SetVSync(bool enabled) override;
 

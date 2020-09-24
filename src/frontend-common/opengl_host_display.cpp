@@ -17,41 +17,82 @@ namespace FrontendCommon {
 class OpenGLHostDisplayTexture : public HostDisplayTexture
 {
 public:
-  OpenGLHostDisplayTexture(GLuint id, u32 width, u32 height) : m_id(id), m_width(width), m_height(height) {}
+  OpenGLHostDisplayTexture(GLuint id, GLenum gl_internal_format, GLenum gl_format, GLenum gl_type, u32 width,
+                           u32 height, Format format)
+    : m_id(id), m_gl_internal_format(gl_internal_format), m_gl_format(gl_format), m_gl_type(gl_type), m_width(width),
+      m_height(height), m_format(format)
+  {
+  }
   ~OpenGLHostDisplayTexture() override { glDeleteTextures(1, &m_id); }
 
   void* GetHandle() const override { return reinterpret_cast<void*>(static_cast<uintptr_t>(m_id)); }
   u32 GetWidth() const override { return m_width; }
   u32 GetHeight() const override { return m_height; }
+  Format GetFormat() const override { return m_format; }
 
   GLuint GetGLID() const { return m_id; }
+  GLenum GetGLInternalFormat() const { return m_gl_internal_format; }
+  GLenum GetGLFormat() const { return m_gl_format; }
+  GLenum GetGLType() const { return m_gl_type; }
 
-  static std::unique_ptr<OpenGLHostDisplayTexture> Create(u32 width, u32 height, const void* initial_data,
-                                                          u32 initial_data_stride)
+  static std::unique_ptr<OpenGLHostDisplayTexture> Create(u32 width, u32 height, Format format,
+                                                          const void* initial_data, u32 initial_data_stride)
   {
     GLuint id;
     glGenTextures(1, &id);
 
-    GLint old_texture_binding = 0;
+    GLint old_texture_binding = 0, old_alignment = 0, old_row_length = 0;
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &old_texture_binding);
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &old_alignment);
+    glGetIntegerv(GL_UNPACK_ROW_LENGTH, &old_row_length);
 
-    // TODO: Set pack width
-    Assert(!initial_data || initial_data_stride == (width * sizeof(u32)));
+    Assert(!initial_data || initial_data_stride == (width * GetTexelSize(format)));
+
+    GLenum gl_internal_format;
+    GLenum gl_format;
+    GLenum gl_type;
+    switch (format)
+    {
+      case Format::RGBA8:
+        gl_internal_format = GL_RGBA8;
+        gl_format = GL_RGBA;
+        gl_type = GL_UNSIGNED_BYTE;
+        break;
+
+      case Format::RGB5551:
+        gl_internal_format = GL_RGB5_A1;
+        gl_format = GL_RGBA;
+        gl_type = GL_UNSIGNED_SHORT_1_5_5_5_REV;
+        break;
+
+      default:
+        return {};
+    }
 
     glBindTexture(GL_TEXTURE_2D, id);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, initial_data);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, HostDisplayTexture::GetTexelSize(format));
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, initial_data_stride / HostDisplayTexture::GetTexelSize(format));
+
+    glTexImage2D(GL_TEXTURE_2D, 0, gl_internal_format, width, height, 0, gl_format, gl_internal_format, initial_data);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 1);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-    glBindTexture(GL_TEXTURE_2D, id);
-    return std::make_unique<OpenGLHostDisplayTexture>(id, width, height);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, old_alignment);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, old_row_length);
+    glBindTexture(GL_TEXTURE_2D, old_texture_binding);
+    return std::make_unique<OpenGLHostDisplayTexture>(id, gl_internal_format, gl_format, gl_type, width, height,
+                                                      format);
   }
 
 private:
   GLuint m_id;
+  GLenum m_gl_internal_format;
+  GLenum m_gl_format;
+  GLenum m_gl_type;
   u32 m_width;
   u32 m_height;
+  Format m_format;
 };
 
 OpenGLHostDisplay::OpenGLHostDisplay() = default;
@@ -76,10 +117,12 @@ void* OpenGLHostDisplay::GetRenderContext() const
   return m_gl_context.get();
 }
 
-std::unique_ptr<HostDisplayTexture> OpenGLHostDisplay::CreateTexture(u32 width, u32 height, const void* initial_data,
-                                                                     u32 initial_data_stride, bool dynamic)
+std::unique_ptr<HostDisplayTexture> OpenGLHostDisplay::CreateTexture(u32 width, u32 height,
+                                                                     HostDisplayTexture::Format format,
+                                                                     const void* initial_data, u32 initial_data_stride,
+                                                                     bool dynamic)
 {
-  return OpenGLHostDisplayTexture::Create(width, height, initial_data, initial_data_stride);
+  return OpenGLHostDisplayTexture::Create(width, height, format, initial_data, initial_data_stride);
 }
 
 void OpenGLHostDisplay::UpdateTexture(HostDisplayTexture* texture, u32 x, u32 y, u32 width, u32 height,
@@ -94,10 +137,10 @@ void OpenGLHostDisplay::UpdateTexture(HostDisplayTexture* texture, u32 x, u32 y,
   glGetIntegerv(GL_UNPACK_ROW_LENGTH, &old_row_length);
 
   glBindTexture(GL_TEXTURE_2D, tex->GetGLID());
-  glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-  glPixelStorei(GL_UNPACK_ROW_LENGTH, texture_data_stride / sizeof(u32));
+  glPixelStorei(GL_UNPACK_ALIGNMENT, HostDisplayTexture::GetTexelSize(tex->GetFormat()));
+  glPixelStorei(GL_UNPACK_ROW_LENGTH, texture_data_stride / HostDisplayTexture::GetTexelSize(tex->GetFormat()));
 
-  glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, width, height, GL_RGBA, GL_UNSIGNED_BYTE, texture_data);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, width, height, tex->GetGLFormat(), tex->GetGLType(), texture_data);
 
   glPixelStorei(GL_UNPACK_ALIGNMENT, old_alignment);
   glPixelStorei(GL_UNPACK_ROW_LENGTH, old_row_length);
@@ -120,6 +163,17 @@ bool OpenGLHostDisplay::DownloadTexture(const void* texture_handle, u32 x, u32 y
   glPixelStorei(GL_PACK_ALIGNMENT, old_alignment);
   glPixelStorei(GL_PACK_ROW_LENGTH, old_row_length);
   return true;
+}
+
+bool OpenGLHostDisplay::MapTexture(HostDisplayTexture* texture, HostDisplayTexture::MapMode mode, void** out_ptr,
+                                   u32* out_stride)
+{
+  return false;
+}
+
+void OpenGLHostDisplay::UnmapTexture(HostDisplayTexture* texture)
+{
+  return;
 }
 
 void OpenGLHostDisplay::SetVSync(bool enabled)
@@ -493,9 +547,9 @@ void OpenGLHostDisplay::RenderDisplay()
   }
 #endif
 
-  RenderDisplay(left, GetWindowHeight() - top - height, width, height, m_display_texture_handle, m_display_texture_width, m_display_texture_height,
-                m_display_texture_view_x, m_display_texture_view_y, m_display_texture_view_width,
-                m_display_texture_view_height, m_display_linear_filtering);
+  RenderDisplay(left, GetWindowHeight() - top - height, width, height, m_display_texture_handle,
+                m_display_texture_width, m_display_texture_height, m_display_texture_view_x, m_display_texture_view_y,
+                m_display_texture_view_width, m_display_texture_view_height, m_display_linear_filtering);
 }
 
 void OpenGLHostDisplay::RenderDisplay(s32 left, s32 bottom, s32 width, s32 height, void* texture_handle,

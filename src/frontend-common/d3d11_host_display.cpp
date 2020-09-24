@@ -26,8 +26,9 @@ public:
   using ComPtr = Microsoft::WRL::ComPtr<T>;
 
   D3D11HostDisplayTexture(ComPtr<ID3D11Texture2D> texture, ComPtr<ID3D11ShaderResourceView> srv, u32 width, u32 height,
-                          bool dynamic)
-    : m_texture(std::move(texture)), m_srv(std::move(srv)), m_width(width), m_height(height), m_dynamic(dynamic)
+                          Format format, bool dynamic)
+    : m_texture(std::move(texture)), m_srv(std::move(srv)), m_width(width), m_height(height), m_format(format),
+      m_dynamic(dynamic)
   {
   }
   ~D3D11HostDisplayTexture() override = default;
@@ -35,16 +36,32 @@ public:
   void* GetHandle() const override { return m_srv.Get(); }
   u32 GetWidth() const override { return m_width; }
   u32 GetHeight() const override { return m_height; }
+  Format GetFormat() const override { return m_format; }
 
   ID3D11Texture2D* GetD3DTexture() const { return m_texture.Get(); }
   ID3D11ShaderResourceView* GetD3DSRV() const { return m_srv.Get(); }
   ID3D11ShaderResourceView* const* GetD3DSRVArray() const { return m_srv.GetAddressOf(); }
   bool IsDynamic() const { return m_dynamic; }
 
-  static std::unique_ptr<D3D11HostDisplayTexture> Create(ID3D11Device* device, u32 width, u32 height, const void* data,
-                                                         u32 data_stride, bool dynamic)
+  static std::unique_ptr<D3D11HostDisplayTexture> Create(ID3D11Device* device, u32 width, u32 height, Format format,
+                                                         const void* data, u32 data_stride, bool dynamic)
   {
-    const CD3D11_TEXTURE2D_DESC desc(DXGI_FORMAT_R8G8B8A8_UNORM, width, height, 1, 1, D3D11_BIND_SHADER_RESOURCE,
+    DXGI_FORMAT dx_format;
+    switch (format)
+    {
+      case Format::RGBA8:
+        dx_format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        break;
+
+      case Format::RGB5551:
+        dx_format = DXGI_FORMAT_B5G5R5A1_UNORM; // TODO: Needs byte swap.
+        break;
+
+      default:
+        return {};
+    }
+
+    const CD3D11_TEXTURE2D_DESC desc(dx_format, width, height, 1, 1, D3D11_BIND_SHADER_RESOURCE,
                                      dynamic ? D3D11_USAGE_DYNAMIC : D3D11_USAGE_DEFAULT,
                                      dynamic ? D3D11_CPU_ACCESS_WRITE : 0, 1, 0, 0);
     const D3D11_SUBRESOURCE_DATA srd{data, data_stride, data_stride * height};
@@ -53,14 +70,14 @@ public:
     if (FAILED(hr))
       return {};
 
-    const CD3D11_SHADER_RESOURCE_VIEW_DESC srv_desc(D3D11_SRV_DIMENSION_TEXTURE2D, DXGI_FORMAT_R8G8B8A8_UNORM, 0, 1, 0,
-                                                    1);
+    const CD3D11_SHADER_RESOURCE_VIEW_DESC srv_desc(D3D11_SRV_DIMENSION_TEXTURE2D, dx_format, 0, 1, 0, 1);
     ComPtr<ID3D11ShaderResourceView> srv;
     hr = device->CreateShaderResourceView(texture.Get(), &srv_desc, srv.GetAddressOf());
     if (FAILED(hr))
       return {};
 
-    return std::make_unique<D3D11HostDisplayTexture>(std::move(texture), std::move(srv), width, height, dynamic);
+    return std::make_unique<D3D11HostDisplayTexture>(std::move(texture), std::move(srv), width, height, format,
+                                                     dynamic);
   }
 
 private:
@@ -68,6 +85,7 @@ private:
   ComPtr<ID3D11ShaderResourceView> m_srv;
   u32 m_width;
   u32 m_height;
+  Format m_format;
   bool m_dynamic;
 };
 
@@ -110,10 +128,13 @@ bool D3D11HostDisplay::HasRenderSurface() const
 #endif
 }
 
-std::unique_ptr<HostDisplayTexture> D3D11HostDisplay::CreateTexture(u32 width, u32 height, const void* initial_data,
-                                                                    u32 initial_data_stride, bool dynamic)
+std::unique_ptr<HostDisplayTexture> D3D11HostDisplay::CreateTexture(u32 width, u32 height,
+                                                                    HostDisplayTexture::Format format,
+                                                                    const void* initial_data, u32 initial_data_stride,
+                                                                    bool dynamic)
 {
-  return D3D11HostDisplayTexture::Create(m_device.Get(), width, height, initial_data, initial_data_stride, dynamic);
+  return D3D11HostDisplayTexture::Create(m_device.Get(), width, height, format, initial_data, initial_data_stride,
+                                         dynamic);
 }
 
 void D3D11HostDisplay::UpdateTexture(HostDisplayTexture* texture, u32 x, u32 y, u32 width, u32 height,
@@ -169,6 +190,29 @@ bool D3D11HostDisplay::DownloadTexture(const void* texture_handle, u32 x, u32 y,
   m_readback_staging_texture.CopyFromTexture(m_context.Get(), srv_resource.Get(), 0, x, y, 0, 0, width, height);
   return m_readback_staging_texture.ReadPixels<u32>(m_context.Get(), 0, 0, width, height, out_data_stride / sizeof(u32),
                                                     static_cast<u32*>(out_data));
+}
+
+bool D3D11HostDisplay::MapTexture(HostDisplayTexture* texture, HostDisplayTexture::MapMode mode, void** out_ptr,
+                                  u32* out_stride)
+{
+  D3D11_MAPPED_SUBRESOURCE sr;
+  HRESULT hr =
+    m_context->Map(static_cast<D3D11HostDisplayTexture*>(texture)->GetD3DTexture(), 0,
+                   (mode == HostDisplayTexture::MapMode::Read) ? D3D11_MAP_READ : D3D11_MAP_WRITE_DISCARD, 0, &sr);
+  if (FAILED(hr))
+  {
+    Log_ErrorPrintf("Map failed: 0x%08X", hr);
+    return false;
+  }
+
+  *out_ptr = sr.pData;
+  *out_stride = sr.RowPitch;
+  return true;
+}
+
+void D3D11HostDisplay::UnmapTexture(HostDisplayTexture* texture)
+{
+  m_context->Unmap(static_cast<D3D11HostDisplayTexture*>(texture)->GetD3DTexture(), 0);
 }
 
 void D3D11HostDisplay::SetVSync(bool enabled)
