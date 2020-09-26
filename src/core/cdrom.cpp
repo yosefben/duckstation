@@ -192,6 +192,7 @@ bool CDROM::DoState(StateWrapper& sw)
   sw.Do(&m_last_cdda_report_frame_nibble);
   sw.Do(&m_play_track_number_bcd);
   sw.Do(&m_async_command_parameter);
+  sw.Do(&m_fast_forward_rate);
   sw.Do(&m_cd_audio_volume_matrix);
   sw.Do(&m_next_cd_audio_volume_matrix);
   sw.Do(&m_xa_last_samples);
@@ -936,6 +937,7 @@ void CDROM::ExecuteCommand()
             (m_drive_state == DriveState::Playing || (IsSeeking() && m_play_after_seek)))
         {
           Log_DevPrintf("Ignoring play command with no/same setloc, already playing/playing after seek");
+          m_fast_forward_rate = 0;
         }
         else
         {
@@ -944,6 +946,48 @@ void CDROM::ExecuteCommand()
 
           BeginPlaying(track);
         }
+      }
+
+      EndCommand();
+      return;
+    }
+
+    case Command::Forward:
+    {
+      if (m_drive_state != DriveState::Playing || !CanReadMedia())
+      {
+        SendErrorResponse(STAT_ERROR, ERROR_REASON_NOT_READY);
+      }
+      else
+      {
+        SendACKAndStat();
+
+        if (m_fast_forward_rate < 0)
+          m_fast_forward_rate = 0;
+
+        m_fast_forward_rate += static_cast<s8>(FAST_FORWARD_RATE_STEP);
+        m_fast_forward_rate = std::min<s8>(m_fast_forward_rate, static_cast<s8>(MAX_FAST_FORWARD_RATE));
+      }
+
+      EndCommand();
+      return;
+    }
+
+    case Command::Backward:
+    {
+      if (m_drive_state != DriveState::Playing || !CanReadMedia())
+      {
+        SendErrorResponse(STAT_ERROR, ERROR_REASON_NOT_READY);
+      }
+      else
+      {
+        SendACKAndStat();
+
+        if (m_fast_forward_rate > 0)
+          m_fast_forward_rate = 0;
+
+        m_fast_forward_rate -= static_cast<s8>(FAST_FORWARD_RATE_STEP);
+        m_fast_forward_rate = std::max<s8>(m_fast_forward_rate, -static_cast<s8>(MAX_FAST_FORWARD_RATE));
       }
 
       EndCommand();
@@ -1370,6 +1414,7 @@ void CDROM::BeginPlaying(u8 track_bcd, TickCount ticks_late /* = 0 */, bool afte
   Log_DebugPrintf("Starting playing CDDA track %x", track_bcd);
   m_last_cdda_report_frame_nibble = 0xFF;
   m_play_track_number_bcd = track_bcd;
+  m_fast_forward_rate = 0;
 
   // if track zero, start from current position
   if (track_bcd != 0)
@@ -1757,6 +1802,7 @@ void CDROM::DoSectorRead()
     ProcessDataSectorHeader(m_reader.GetSectorBuffer().data());
   }
 
+  u32 next_sector = m_current_lba + 1u;
   if (is_data_sector && m_drive_state == DriveState::Reading)
   {
     ProcessDataSector(m_reader.GetSectorBuffer().data(), subq);
@@ -1765,6 +1811,9 @@ void CDROM::DoSectorRead()
            (m_drive_state == DriveState::Playing || (m_drive_state == DriveState::Reading && m_mode.cdda)))
   {
     ProcessCDDASector(m_reader.GetSectorBuffer().data(), subq);
+
+    if (m_fast_forward_rate != 0)
+      next_sector = m_current_lba + SignExtend32(m_fast_forward_rate);
   }
   else if (m_drive_state != DriveState::Reading && m_drive_state != DriveState::Playing)
   {
@@ -1776,7 +1825,7 @@ void CDROM::DoSectorRead()
                       is_data_sector ? "data" : "audio", is_data_sector ? "reading" : "playing");
   }
 
-  m_reader.QueueReadSector(m_current_lba + 1u);
+  m_reader.QueueReadSector(next_sector);
 }
 
 void CDROM::ProcessDataSectorHeader(const u8* raw_sector)
