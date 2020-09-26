@@ -233,6 +233,7 @@ void Settings::Load(SettingsInterface& si)
   debugging.show_spu_state = si.GetBoolValue("Debug", "ShowSPUState");
   debugging.show_timers_state = si.GetBoolValue("Debug", "ShowTimersState");
   debugging.show_mdec_state = si.GetBoolValue("Debug", "ShowMDECState");
+  debugging.show_dma_state = si.GetBoolValue("Debug", "ShowDMAState");
 }
 
 void Settings::Save(SettingsInterface& si) const
@@ -343,6 +344,7 @@ void Settings::Save(SettingsInterface& si) const
   si.SetBoolValue("Debug", "ShowSPUState", debugging.show_spu_state);
   si.SetBoolValue("Debug", "ShowTimersState", debugging.show_timers_state);
   si.SetBoolValue("Debug", "ShowMDECState", debugging.show_mdec_state);
+  si.SetBoolValue("Debug", "ShowDMAState", debugging.show_dma_state);
 }
 
 static std::array<const char*, LOGLEVEL_COUNT> s_log_level_names = {
