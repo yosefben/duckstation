@@ -371,6 +371,12 @@ void UpdateFastmemViews(bool enabled, bool isolate_cache)
   // MapBIOS(0xBFC00000);
 }
 
+bool CanUseFastmemForAddress(VirtualMemoryAddress address)
+{
+  const PhysicalMemoryAddress paddr = address & CPU::PHYSICAL_MEMORY_ADDRESS_MASK;
+  return IsRAMAddress(paddr);
+}
+
 bool IsRAMCodePage(u32 index)
 {
   return m_ram_code_bits[index];
